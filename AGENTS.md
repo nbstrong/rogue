@@ -111,7 +111,7 @@ cargo test -p rogue_app --features dev
 Run the full workspace validation only after the targeted commands succeed:
 
 ```bash
-cargo test --workspace
+cargo test --workspace --features rogue_app/dev
 ```
 
 ## Formatting
@@ -129,7 +129,7 @@ Do not run formatting for documentation-only changes.
 * Never run `cargo clean` unless the user explicitly requests it.
 * Never delete the `target` directory as routine troubleshooting.
 * Never run `cargo build --workspace` by default.
-* Never run `cargo test --workspace` when a crate-specific test is sufficient.
+* Never run `cargo test --workspace --features rogue_app/dev` when a crate-specific test is sufficient.
 * Never run a release build unless the user explicitly requests one.
 * Never run both `cargo check` and `cargo test` for the same scope without a reason; tests already compile the affected targets.
 * Do not use unqualified commands such as `cargo build` or `cargo test`. Always specify the intended package.
@@ -158,5 +158,5 @@ Cross-crate or Cargo configuration task:
 cargo fmt --all -- --check
 cargo test -p rogue_core
 cargo test -p rogue_app --features dev
-cargo test --workspace
+cargo test --workspace --features rogue_app/dev
 ```

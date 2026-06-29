@@ -27,10 +27,6 @@ bevy_math = "0.19"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 
-[features]
-default = []
-dev = ["bevy/dynamic_linking"]
-
 [dependencies]
 rogue_core = { path = "crates/rogue_core" }
 
