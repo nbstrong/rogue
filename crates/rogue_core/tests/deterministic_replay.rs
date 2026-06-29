@@ -1,4 +1,5 @@
-use bevy::prelude::*;
+use bevy_app::App;
+use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
@@ -12,7 +13,6 @@ use rogue_core::world::spatial::SpatialIndex;
 
 fn run_replay() -> u64 {
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
     app.add_plugins(SimulationPlugin);
     app.world_mut().insert_resource(generate_one_room(7, 7));
     app.world_mut().insert_resource(SpatialIndex::default());

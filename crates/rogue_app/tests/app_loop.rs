@@ -17,7 +17,6 @@ use rogue_core::world::map::LevelMap;
 
 fn build_app() -> App {
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
     app.add_plugins(StatesPlugin);
     app.init_state::<AppState>();
     app.insert_resource(ButtonInput::<KeyCode>::default());
