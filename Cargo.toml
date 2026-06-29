@@ -19,7 +19,7 @@ version = "0.1.0"
 bevy = {
     version = "0.19",
     default-features = false,
-    features = ["2d", "ui"],
+    features = ["2d", "ui", "default_font"],
 }
 bevy_app = "0.19"
 bevy_ecs = "0.19"

@@ -40,6 +40,34 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
     app.update();
     app.update();
 
+    let map = app.world().resource::<LevelMap>();
+    let map_views = app.world().resource::<rogue_app::game::MapViews>();
+
+    assert_eq!(
+        map_views.tiles.len(),
+        map.width as usize * map.height as usize,
+        "every map tile should have a presentation entity"
+    );
+
+    let actor_views = app.world().resource::<rogue_app::game::ActorViews>();
+    assert!(
+        actor_views.views.len() >= 2,
+        "the player and monster should both have presentation entities"
+    );
+
+    let camera_count = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<Camera2d>>()
+            .iter(world)
+            .count()
+    };
+
+    assert_eq!(
+        camera_count, 1,
+        "the game should have exactly one 2D camera"
+    );
+
     assert_eq!(
         *app.world().resource::<State<AppState>>(),
         AppState::Playing

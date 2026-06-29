@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
-use bevy::text::{FontSize, FontSource, Justify, TextColor, TextFont, TextLayout};
+use bevy::text::{Justify, TextColor, TextFont, TextLayout};
 use bevy_math::Vec3;
 use rogue_core::actor::components::{Monster, Player};
 use rogue_core::world::map::{GridPosition, LevelMap};
@@ -28,11 +28,7 @@ pub fn synchronize_actor_views(
     let half_w = map.width as f32 * TILE_SIZE / 2.0;
     let half_h = map.height as f32 * TILE_SIZE / 2.0;
     let mut seen = std::collections::HashSet::new();
-    let text_font = TextFont {
-        font: FontSource::Monospace,
-        font_size: FontSize::Px(TILE_SIZE),
-        ..default()
-    };
+    let text_font = TextFont::from_font_size(TILE_SIZE);
 
     for (entity, position, player, monster) in actors.iter() {
         seen.insert(entity);

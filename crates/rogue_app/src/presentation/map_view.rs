@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
-use bevy::text::{FontSize, FontSource, Justify, TextColor, TextFont, TextLayout};
+use bevy::text::{Justify, TextColor, TextFont, TextLayout};
 use bevy_math::{IVec2, Vec3};
 use rogue_core::world::map::LevelId;
 use rogue_core::world::map::LevelMap;
@@ -45,11 +45,7 @@ pub fn synchronize_map_view(
 ) {
     let half_w = map.width as f32 * TILE_SIZE / 2.0;
     let half_h = map.height as f32 * TILE_SIZE / 2.0;
-    let text_font = TextFont {
-        font: FontSource::Monospace,
-        font_size: FontSize::Px(TILE_SIZE),
-        ..default()
-    };
+    let text_font = TextFont::from_font_size(TILE_SIZE);
 
     for y in 0..map.height as i32 {
         for x in 0..map.width as i32 {
