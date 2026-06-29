@@ -6,14 +6,15 @@ use bevy::ui::{Node, PositionType, Val};
 use bevy_math::IVec2;
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::{
-    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer,
-    Monster, PersistentId, Player, PrototypeId, Vision,
+    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
+    PersistentId, Player, PrototypeId, Vision,
 };
 use rogue_core::content::definitions::ActorDefinition;
 use rogue_core::content::registry::ContentRegistry;
 use rogue_core::item::effects::EffectQueue;
 use rogue_core::simulation::SimulationStatus;
 use rogue_core::time::clock::TurnClock;
+use rogue_core::world::fov::recalculate_fov_for_player;
 use rogue_core::world::generation::generate_one_room;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
@@ -79,10 +80,8 @@ impl Plugin for GamePlugin {
             .add_systems(Startup, bootstrap_game)
             .add_systems(
                 Update,
-                (
-                    drive_simulation_if_resolving,
-                    sync_game_state,
-                )
+                (drive_simulation_if_resolving,)
+                    .chain()
                     .run_if(in_state(AppState::Playing)),
             )
             .add_systems(OnEnter(AppState::GameOver), show_game_over_message);
@@ -103,7 +102,11 @@ fn bootstrap_game(world: &mut World) {
 }
 
 fn spawn_camera_if_needed(world: &mut World) {
-    let has_camera = world.query_filtered::<Entity, With<Camera2d>>().iter(world).next().is_some();
+    let has_camera = world
+        .query_filtered::<Entity, With<Camera2d>>()
+        .iter(world)
+        .next()
+        .is_some();
     if !has_camera {
         world.spawn((Camera2d, Transform::default(), SessionEntity));
     }
@@ -164,6 +167,16 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.insert_resource(SimulationStatus::WaitingForPlayer);
     world.insert_resource(CurrentInputMode::default());
 
+    if let Some(mut map) = world.get_resource_mut::<LevelMap>() {
+        recalculate_fov_for_player(
+            &mut map,
+            GridPosition {
+                level,
+                cell: player_cell,
+            },
+        );
+    }
+
     spawn_camera_if_needed(world);
 
     if let Some(mut view_cache) = world.get_resource_mut::<MapViews>() {
@@ -177,6 +190,32 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     }
     if let Some(mut snapshot) = world.get_resource_mut::<HealthSnapshot>() {
         snapshot.values.clear();
+    }
+
+    let hud_message = format!(
+        "HP {}/{}  Pos ({}, {})  {:?}\nMove with HJKL/YUBN or Space to wait.",
+        player_def.maximum_health,
+        player_def.maximum_health,
+        player_cell.x,
+        player_cell.y,
+        SimulationStatus::WaitingForPlayer
+    );
+    if let Some(entity) = world
+        .query_filtered::<Entity, With<HudText>>()
+        .iter(world)
+        .next()
+    {
+        world.entity_mut(entity).insert(Text::new(hud_message));
+    }
+
+    if let Some(entity) = world
+        .query_filtered::<Entity, With<LogText>>()
+        .iter(world)
+        .next()
+    {
+        world
+            .entity_mut(entity)
+            .insert(Text::new("A new delver enters the room."));
     }
 }
 
@@ -253,31 +292,64 @@ fn drive_simulation_if_resolving(world: &mut World) {
     if world.resource::<SimulationStatus>() == &SimulationStatus::Resolving {
         rogue_core::drive_simulation(world);
     }
-}
 
-fn sync_game_state(
-    simulation: Res<'_, SimulationStatus>,
-    state: Res<'_, State<AppState>>,
-    mut next_state: ResMut<'_, NextState<AppState>>,
-) {
-    if *simulation == SimulationStatus::GameOver && state.get() != &AppState::GameOver {
-        next_state.set(AppState::GameOver);
+    let player_alive = world
+        .query_filtered::<&Health, With<Player>>()
+        .iter(world)
+        .any(|health| health.current > 0);
+    if !player_alive {
+        if let Some(mut simulation) = world.get_resource_mut::<SimulationStatus>() {
+            *simulation = SimulationStatus::GameOver;
+        }
+    }
+
+    if world.resource::<SimulationStatus>() == &SimulationStatus::GameOver {
+        let state_is_game_over = world
+            .get_resource::<State<AppState>>()
+            .is_some_and(|state| state.get() == &AppState::GameOver);
+        if !state_is_game_over {
+            if let Some(mut next_state) = world.get_resource_mut::<NextState<AppState>>() {
+                next_state.set(AppState::GameOver);
+            }
+        }
     }
 }
 
 fn show_game_over_message(
     mut commands: Commands<'_, '_>,
-    query: Query<'_, '_, Entity, With<LogText>>,
+    mut hud: Query<'_, '_, &mut Text, (With<HudText>, Without<LogText>)>,
+    mut log: Query<'_, '_, &mut Text, (With<LogText>, Without<HudText>)>,
 ) {
-    if query.is_empty() {
+    let message = "Game over. Press R to restart.";
+
+    if let Some(mut text) = hud.iter_mut().next() {
+        *text = Text::new(message);
+    } else {
         commands.spawn((
-            Text::new("Game over. Press R to restart."),
-            TextFont::from_font_size(20.0),
-            TextColor(Color::srgb(1.0, 0.8, 0.8)),
+            Text::new(message),
+            TextFont::from_font_size(18.0),
+            TextColor(Color::WHITE),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(16.0),
-                bottom: Val::Px(16.0),
+                top: Val::Px(12.0),
+                ..default()
+            },
+            HudText,
+        ));
+    }
+
+    if let Some(mut text) = log.iter_mut().next() {
+        *text = Text::new(message);
+    } else {
+        commands.spawn((
+            Text::new(message),
+            TextFont::from_font_size(16.0),
+            TextColor(Color::srgb(0.85, 0.85, 0.85)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(16.0),
+                bottom: Val::Px(12.0),
                 ..default()
             },
             LogText,

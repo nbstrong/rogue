@@ -45,6 +45,7 @@ pub fn update_hud(
     }
 
     if log.lines.is_empty() {
-        log.lines.push_back("A new delver enters the room.".to_string());
+        log.lines
+            .push_back("A new delver enters the room.".to_string());
     }
 }

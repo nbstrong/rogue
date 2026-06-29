@@ -1,24 +1,29 @@
 use bevy::prelude::*;
 use bevy::ui::{Node, PositionType, Val};
+use rogue_core::simulation::SimulationStatus;
 
 use crate::game::{CombatLog, LogText};
 
 pub fn flush_combat_log(
     mut commands: Commands<'_, '_>,
     mut log: ResMut<'_, CombatLog>,
+    status: Res<'_, SimulationStatus>,
     query: Query<'_, '_, Entity, With<LogText>>,
 ) {
-    let text = log
-        .lines
-        .iter()
-        .rev()
-        .take(6)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = if *status == SimulationStatus::GameOver {
+        "Game over. Press R to restart.".to_string()
+    } else {
+        log.lines
+            .iter()
+            .rev()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     if let Some(entity) = query.iter().next() {
         commands.entity(entity).insert(Text::new(text));
@@ -37,7 +42,7 @@ pub fn flush_combat_log(
         ));
     }
 
-    if log.lines.len() > 24 {
+    if *status != SimulationStatus::GameOver && log.lines.len() > 24 {
         while log.lines.len() > 24 {
             let _ = log.lines.pop_front();
         }

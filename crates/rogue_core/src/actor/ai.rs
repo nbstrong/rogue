@@ -4,9 +4,9 @@ use bevy_math::IVec2;
 use crate::action::intent::{Action, ActionKind};
 use crate::action::queue::ActionQueue;
 use crate::actor::components::{HostileToPlayer, Monster, Player};
+use crate::time::clock::CurrentActor;
 use crate::world::map::GridPosition;
 use crate::world::spatial::SpatialIndex;
-use crate::time::clock::CurrentActor;
 
 fn step_toward(from: IVec2, to: IVec2) -> IVec2 {
     IVec2::new((to.x - from.x).signum(), (to.y - from.y).signum())
@@ -14,7 +14,12 @@ fn step_toward(from: IVec2, to: IVec2) -> IVec2 {
 
 pub fn generate_ai_action(
     mut queue: ResMut<'_, ActionQueue>,
-    monsters: Query<'_, '_, (Entity, &GridPosition), (With<Monster>, With<HostileToPlayer>, Without<Player>)>,
+    monsters: Query<
+        '_,
+        '_,
+        (Entity, &GridPosition),
+        (With<Monster>, With<HostileToPlayer>, Without<Player>),
+    >,
     players: Query<'_, '_, (Entity, &GridPosition), With<Player>>,
     spatial: Res<'_, SpatialIndex>,
     current_actor: Option<Res<'_, CurrentActor>>,

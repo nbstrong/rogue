@@ -22,4 +22,3 @@ impl ActionQueue {
         self.actions.is_empty()
     }
 }
-

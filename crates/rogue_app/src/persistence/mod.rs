@@ -9,4 +9,3 @@ impl Plugin for SavePlugin {
         app.add_systems(Startup, files::bootstrap_save_system);
     }
 }
-

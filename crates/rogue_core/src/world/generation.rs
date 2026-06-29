@@ -18,4 +18,3 @@ pub fn generate_one_room(width: u32, height: u32) -> LevelMap {
 
     map
 }
-

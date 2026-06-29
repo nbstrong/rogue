@@ -1,6 +1,6 @@
+use crate::app_state::AppState;
 use bevy::prelude::*;
 use bevy::state::condition::in_state;
-use crate::app_state::AppState;
 
 pub mod actor_view;
 pub mod animation;

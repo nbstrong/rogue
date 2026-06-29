@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::sprite::Sprite;
 use bevy_math::{IVec2, Vec3};
-use rogue_core::world::map::LevelMap;
 use rogue_core::world::map::LevelId;
+use rogue_core::world::map::LevelMap;
 use rogue_core::world::tile::TileKind;
 
 use crate::game::{MapTileView, MapViews, SessionEntity, TILE_SIZE};
@@ -65,5 +65,4 @@ pub fn synchronize_map_view(
             }
         }
     }
-
 }

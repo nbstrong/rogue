@@ -6,9 +6,9 @@ use crate::actor::combat::DamageKind;
 use crate::actor::components::{BlocksMovement, CombatStats, Health, Monster, Player};
 use crate::item::effects::{Effect, EffectQueue};
 use crate::time::clock::TurnClock;
+use crate::world::map::GridPosition;
 use crate::world::map::{LevelId, LevelMap};
 use crate::world::spatial::SpatialIndex;
-use crate::world::map::GridPosition;
 use crate::{actor::components::ActionSpeed, world::tile::TileKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +44,19 @@ pub fn resolve_action(
     mut effects: ResMut<'_, EffectQueue>,
     mut map: ResMut<'_, LevelMap>,
     spatial: Res<'_, SpatialIndex>,
-    positions: Query<'_, '_, (Entity, &GridPosition, Option<&BlocksMovement>, Option<&Player>, Option<&Monster>, Option<&CombatStats>, Option<&Health>)>,
+    positions: Query<
+        '_,
+        '_,
+        (
+            Entity,
+            &GridPosition,
+            Option<&BlocksMovement>,
+            Option<&Player>,
+            Option<&Monster>,
+            Option<&CombatStats>,
+            Option<&Health>,
+        ),
+    >,
     speeds: Query<'_, '_, &ActionSpeed>,
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
     mut turn_clock: ResMut<'_, TurnClock>,
@@ -96,7 +108,10 @@ pub fn resolve_action(
                     }
                     turn_clock.schedule_after(action.actor, 80);
                 }
-                Some(TileKind::Floor) | Some(TileKind::OpenDoor) | Some(TileKind::StairsDown) | Some(TileKind::StairsUp) => {
+                Some(TileKind::Floor)
+                | Some(TileKind::OpenDoor)
+                | Some(TileKind::StairsDown)
+                | Some(TileKind::StairsUp) => {
                     if spatial
                         .occupants_at(position.level, destination)
                         .find(|occupant| occupant != &action.actor)

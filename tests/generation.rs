@@ -10,4 +10,3 @@ fn one_room_has_wall_border_and_floor_interior() {
     assert_eq!(map.tile(IVec2::new(2, 2)).unwrap().kind, TileKind::Floor);
     assert_eq!(map.tile(IVec2::new(4, 4)).unwrap().kind, TileKind::Wall);
 }
-

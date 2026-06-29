@@ -1,14 +1,14 @@
 use bevy::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::action::intent::{Action, ActionKind};
+use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::*;
+use rogue_core::item::effects::EffectQueue;
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus, SimulationStep};
 use rogue_core::time::clock::TurnClock;
 use rogue_core::world::generation::generate_one_room;
 use rogue_core::world::map::{GridPosition, LevelId};
 use rogue_core::world::spatial::SpatialIndex;
-use rogue_core::item::effects::EffectQueue;
-use rogue_core::action::queue::ActionQueue;
 
 fn build_app() -> App {
     let mut app = App::new();
@@ -19,8 +19,7 @@ fn build_app() -> App {
 
 fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
     let level = LevelId(0);
-    app.world_mut()
-        .insert_resource(generate_one_room(7, 7));
+    app.world_mut().insert_resource(generate_one_room(7, 7));
     let mut spatial = SpatialIndex::default();
     app.world_mut().insert_resource(EffectQueue::default());
     app.world_mut().insert_resource(ActionQueue::default());
@@ -37,7 +36,10 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
                 current: 10,
                 maximum: 10,
             },
-            CombatStats { power: 3, defense: 1 },
+            CombatStats {
+                power: 3,
+                defense: 1,
+            },
             Vision { range: 8 },
             ActionSpeed {
                 ticks_per_action: 100,
@@ -62,7 +64,10 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
                 current: 4,
                 maximum: 4,
             },
-            CombatStats { power: 1, defense: 0 },
+            CombatStats {
+                power: 1,
+                defense: 0,
+            },
             Vision { range: 8 },
             ActionSpeed {
                 ticks_per_action: 120,
@@ -78,21 +83,13 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
     spatial
         .occupants
         .insert((level, IVec2::new(2, 2)), vec![player]);
-    spatial
-        .movement_blockers
-        .insert((level, IVec2::new(2, 2)));
-    spatial
-        .sight_blockers
-        .insert((level, IVec2::new(2, 2)));
+    spatial.movement_blockers.insert((level, IVec2::new(2, 2)));
+    spatial.sight_blockers.insert((level, IVec2::new(2, 2)));
     spatial
         .occupants
         .insert((level, IVec2::new(3, 2)), vec![monster]);
-    spatial
-        .movement_blockers
-        .insert((level, IVec2::new(3, 2)));
-    spatial
-        .sight_blockers
-        .insert((level, IVec2::new(3, 2)));
+    spatial.movement_blockers.insert((level, IVec2::new(3, 2)));
+    spatial.sight_blockers.insert((level, IVec2::new(3, 2)));
     app.world_mut().insert_resource(spatial);
 
     (player, monster)

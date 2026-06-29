@@ -46,4 +46,3 @@ pub struct EntitySnapshot {
     pub health: Option<SavedHealth>,
     pub inventory_owner: Option<u64>,
 }
-

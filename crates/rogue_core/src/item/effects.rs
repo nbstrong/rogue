@@ -48,7 +48,10 @@ pub fn apply_pending_effects(
                     hp.current = (hp.current + amount).min(hp.maximum);
                 }
             }
-            Effect::Teleport { target, destination } => {
+            Effect::Teleport {
+                target,
+                destination,
+            } => {
                 commands.entity(target).insert(destination);
             }
             Effect::ApplyStatus { .. } => {}

@@ -8,4 +8,3 @@ pub fn migrate_snapshot(mut snapshot: GameSnapshot) -> GameSnapshot {
     }
     snapshot
 }
-

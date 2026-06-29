@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::sprite::Sprite;
 use bevy_math::Vec3;
 use rogue_core::actor::components::{Monster, Player};
-use rogue_core::world::map::GridPosition;
+use rogue_core::world::map::{GridPosition, LevelMap};
 
 use crate::game::{ActorView, ActorViews, SessionEntity, TILE_SIZE};
 
@@ -17,7 +17,7 @@ fn actor_color(player: bool) -> Color {
 pub fn synchronize_actor_views(
     mut commands: Commands<'_, '_>,
     mut views: ResMut<'_, ActorViews>,
-    map: Res<'_, rogue_core::world::map::LevelMap>,
+    map: Res<'_, LevelMap>,
     actors: Query<'_, '_, (Entity, &GridPosition, Option<&Player>, Option<&Monster>)>,
 ) {
     let half_w = map.width as f32 * TILE_SIZE / 2.0;
@@ -42,14 +42,24 @@ pub fn synchronize_actor_views(
             position.cell.y as f32 * TILE_SIZE - half_h + TILE_SIZE / 2.0,
             10.0,
         );
-        let mut sprite = Sprite::from_color(actor_color(player.is_some()), Vec2::splat(TILE_SIZE * 0.8));
+        let mut sprite =
+            Sprite::from_color(actor_color(player.is_some()), Vec2::splat(TILE_SIZE * 0.8));
         if monster.is_some() {
             sprite.color = Color::srgb(0.80, 0.30, 0.30);
         }
+        let visible = map
+            .tile(position.cell)
+            .map(|tile| tile.visible)
+            .unwrap_or(false)
+            || player.is_some();
         commands.entity(*view_entity).insert((
             Transform::from_translation(world_pos),
             sprite,
-            Visibility::Visible,
+            if visible {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
         ));
     }
 

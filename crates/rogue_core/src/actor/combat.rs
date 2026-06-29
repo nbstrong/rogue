@@ -11,4 +11,3 @@ pub enum StatusEffect {
     Poisoned { remaining: u32 },
     Stunned { remaining: u32 },
 }
-

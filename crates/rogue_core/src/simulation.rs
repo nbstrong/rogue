@@ -5,11 +5,11 @@ use bevy_ecs::schedule::ScheduleLabel;
 use crate::action::queue::ActionQueue;
 use crate::action::resolver::{resolve_action, validate_action};
 use crate::actor::ai::generate_ai_action;
-use crate::item::effects::{apply_pending_effects, EffectQueue};
+use crate::item::effects::{EffectQueue, apply_pending_effects};
 use crate::time::clock::{CurrentActor, TurnClock};
 use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
-use crate::world::spatial::{update_spatial_index, SpatialIndex};
+use crate::world::spatial::{SpatialIndex, update_spatial_index};
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimulationStep;
@@ -108,7 +108,11 @@ pub fn remove_dead_entities(
         }
     }
 
-    let player_exists = players.iter().any(|entity| query.get(entity).is_ok_and(|(_, health)| health.current > 0));
+    let player_exists = players.iter().any(|entity| {
+        query
+            .get(entity)
+            .is_ok_and(|(_, health)| health.current > 0)
+    });
     if !player_exists {
         *status = SimulationStatus::GameOver;
     }

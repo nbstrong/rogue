@@ -12,22 +12,11 @@ pub struct Action {
 #[derive(Debug, Clone)]
 pub enum ActionKind {
     Wait,
-    Move {
-        delta: IVec2,
-    },
-    Melee {
-        target: Entity,
-    },
-    PickUp {
-        item: Entity,
-    },
-    Drop {
-        item: Entity,
-    },
-    UseItem {
-        item: Entity,
-        target: ActionTarget,
-    },
+    Move { delta: IVec2 },
+    Melee { target: Entity },
+    PickUp { item: Entity },
+    Drop { item: Entity },
+    UseItem { item: Entity, target: ActionTarget },
     Descend,
     Ascend,
 }
@@ -36,10 +25,7 @@ pub enum ActionKind {
 pub enum ActionTarget {
     SelfTarget,
     Entity(Entity),
-    Cell {
-        level: LevelId,
-        position: IVec2,
-    },
+    Cell { level: LevelId, position: IVec2 },
 }
 
 impl ActionTarget {
@@ -58,4 +44,3 @@ impl From<GridPosition> for ActionTarget {
         }
     }
 }
-

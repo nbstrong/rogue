@@ -27,4 +27,3 @@ impl ContentRegistry {
         Ok(())
     }
 }
-

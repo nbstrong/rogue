@@ -45,7 +45,10 @@ pub fn capture_keyboard_input(
     };
 
     if let Some(kind) = action {
-        queue.push(Action { actor: player, kind });
+        queue.push(Action {
+            actor: player,
+            kind,
+        });
         *simulation = SimulationStatus::Resolving;
     }
 }

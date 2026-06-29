@@ -18,4 +18,3 @@ pub struct ItemDefinition {
     pub name: String,
     pub glyph: char,
 }
-

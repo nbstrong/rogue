@@ -11,4 +11,3 @@ pub fn action_cost(kind: &ActionKind) -> u64 {
         ActionKind::Descend | ActionKind::Ascend => 80,
     }
 }
-

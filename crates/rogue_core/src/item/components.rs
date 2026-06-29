@@ -24,4 +24,3 @@ impl Inventory {
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CarriedBy(pub Entity);
-

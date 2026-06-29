@@ -16,7 +16,10 @@ pub fn spawn_player(commands: &mut Commands<'_, '_>, level: LevelId, cell: IVec2
                 current: 10,
                 maximum: 10,
             },
-            CombatStats { power: 3, defense: 1 },
+            CombatStats {
+                power: 3,
+                defense: 1,
+            },
             Vision { range: 8 },
             ActionSpeed {
                 ticks_per_action: 100,
@@ -27,7 +30,12 @@ pub fn spawn_player(commands: &mut Commands<'_, '_>, level: LevelId, cell: IVec2
         .id()
 }
 
-pub fn spawn_monster(commands: &mut Commands<'_, '_>, definition: &ActorDefinition, level: LevelId, cell: IVec2) -> Entity {
+pub fn spawn_monster(
+    commands: &mut Commands<'_, '_>,
+    definition: &ActorDefinition,
+    level: LevelId,
+    cell: IVec2,
+) -> Entity {
     commands
         .spawn((
             Actor,

@@ -4,8 +4,8 @@ use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 
 use crate::actor::components::{BlocksMovement, BlocksSight};
-use crate::world::map::{LevelId, LevelMap};
 use crate::world::map::GridPosition;
+use crate::world::map::{LevelId, LevelMap};
 
 #[derive(Resource, Default, Debug, Clone)]
 pub struct SpatialIndex {
@@ -15,7 +15,19 @@ pub struct SpatialIndex {
 }
 
 impl SpatialIndex {
-    pub fn rebuild(&mut self, entities: &Query<'_, '_, (Entity, &GridPosition, Option<&BlocksMovement>, Option<&BlocksSight>)>) {
+    pub fn rebuild(
+        &mut self,
+        entities: &Query<
+            '_,
+            '_,
+            (
+                Entity,
+                &GridPosition,
+                Option<&BlocksMovement>,
+                Option<&BlocksSight>,
+            ),
+        >,
+    ) {
         self.occupants.clear();
         self.movement_blockers.clear();
         self.sight_blockers.clear();
@@ -42,7 +54,16 @@ impl SpatialIndex {
 
 pub fn update_spatial_index(
     mut index: ResMut<'_, SpatialIndex>,
-    entities: Query<'_, '_, (Entity, &GridPosition, Option<&BlocksMovement>, Option<&BlocksSight>)>,
+    entities: Query<
+        '_,
+        '_,
+        (
+            Entity,
+            &GridPosition,
+            Option<&BlocksMovement>,
+            Option<&BlocksSight>,
+        ),
+    >,
     _map: Option<Res<'_, LevelMap>>,
 ) {
     index.rebuild(&entities);

@@ -1,7 +1,4 @@
-use std::{
-    cmp::Reverse,
-    collections::BinaryHeap,
-};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use bevy_ecs::prelude::*;
 
@@ -14,7 +11,11 @@ pub struct ScheduledActor {
 
 impl Ord for ScheduledActor {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.next_tick, self.sequence, self.actor).cmp(&(other.next_tick, other.sequence, other.actor))
+        (self.next_tick, self.sequence, self.actor).cmp(&(
+            other.next_tick,
+            other.sequence,
+            other.actor,
+        ))
     }
 }
 

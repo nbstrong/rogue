@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::action::intent::{Action, ActionKind};
+use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::*;
 use rogue_core::item::effects::EffectQueue;
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus, SimulationStep};
@@ -8,7 +9,6 @@ use rogue_core::time::clock::TurnClock;
 use rogue_core::world::generation::generate_one_room;
 use rogue_core::world::map::{GridPosition, LevelId};
 use rogue_core::world::spatial::SpatialIndex;
-use rogue_core::action::queue::ActionQueue;
 
 fn run_replay() -> u64 {
     let mut app = App::new();
@@ -31,7 +31,10 @@ fn run_replay() -> u64 {
                 current: 10,
                 maximum: 10,
             },
-            CombatStats { power: 3, defense: 1 },
+            CombatStats {
+                power: 3,
+                defense: 1,
+            },
             Vision { range: 8 },
             ActionSpeed {
                 ticks_per_action: 100,

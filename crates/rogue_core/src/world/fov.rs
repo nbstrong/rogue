@@ -3,7 +3,6 @@ use bevy_math::IVec2;
 
 use crate::world::map::GridPosition;
 use crate::world::map::LevelMap;
-use crate::world::spatial::SpatialIndex;
 use crate::world::tile::TileKind;
 
 fn line_of_sight(map: &LevelMap, from: IVec2, to: IVec2) -> bool {
@@ -44,20 +43,13 @@ fn line_of_sight(map: &LevelMap, from: IVec2, to: IVec2) -> bool {
     }
 }
 
-pub fn recalculate_fov(
-    mut map: ResMut<'_, LevelMap>,
-    player: Query<'_, '_, &GridPosition, With<crate::actor::components::Player>>,
-    _spatial: Res<'_, SpatialIndex>,
-) {
-    let Some(player_position) = player.iter().next() else {
-        return;
-    };
+pub fn recalculate_fov_for_player(map: &mut LevelMap, player_position: GridPosition) {
+    let origin = player_position.cell;
 
     for tile in &mut map.tiles {
         tile.visible = false;
     }
 
-    let origin = player_position.cell;
     let range = 8;
 
     for y in 0..map.height as i32 {
@@ -75,4 +67,15 @@ pub fn recalculate_fov(
             }
         }
     }
+}
+
+pub fn recalculate_fov(
+    mut map: ResMut<'_, LevelMap>,
+    player: Query<'_, '_, &GridPosition, With<crate::actor::components::Player>>,
+) {
+    let Some(player_position) = player.iter().next().copied() else {
+        return;
+    };
+
+    recalculate_fov_for_player(&mut map, player_position);
 }

@@ -22,4 +22,3 @@ pub fn add_item_to_inventory(
     }
     true
 }
-
