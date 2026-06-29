@@ -275,5 +275,7 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
             .map(|text| text.as_str().to_string())
             .expect("hud text")
     };
-    assert!(hud_text.contains("Move with"));
+    assert!(hud_text.contains("HP"));
+    assert!(hud_text.contains("Pos"));
+    assert!(hud_text.contains("WaitingForPlayer"));
 }

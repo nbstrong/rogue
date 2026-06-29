@@ -1,49 +1,26 @@
 use bevy::prelude::*;
-use bevy::ui::{Node, PositionType, Val};
 use rogue_core::simulation::SimulationStatus;
 
 use crate::game::{CombatLog, LogText};
 
 pub fn flush_combat_log(
-    mut commands: Commands<'_, '_>,
+    mut query: Query<'_, '_, &mut Text, With<LogText>>,
     mut log: ResMut<'_, CombatLog>,
     status: Res<'_, SimulationStatus>,
-    query: Query<'_, '_, Entity, With<LogText>>,
 ) {
-    let text = if *status == SimulationStatus::GameOver {
-        "Game over. Press R to restart.".to_string()
-    } else {
-        log.lines
-            .iter()
-            .rev()
-            .take(6)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    if let Some(entity) = query.iter().next() {
-        commands.entity(entity).insert(Text::new(text));
-    } else {
-        commands.spawn((
-            Text::new(text),
-            TextFont::from_font_size(16.0),
-            TextColor(Color::srgb(0.85, 0.85, 0.85)),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(16.0),
-                bottom: Val::Px(12.0),
-                ..default()
-            },
-            LogText,
-        ));
+    let mut lines: Vec<_> = log.lines.iter().cloned().collect();
+    if *status == SimulationStatus::GameOver {
+        lines.push("Game over. Press R to restart.".to_string());
     }
 
-    if *status != SimulationStatus::GameOver && log.lines.len() > 24 {
-        while log.lines.len() > 24 {
+    if let Some(mut text) = query.iter_mut().next() {
+        *text = Text::new(lines.join("\n"));
+    } else {
+        return;
+    }
+
+    if *status != SimulationStatus::GameOver && log.lines.len() > 128 {
+        while log.lines.len() > 128 {
             let _ = log.lines.pop_front();
         }
     }

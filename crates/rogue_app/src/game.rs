@@ -1,8 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
-use bevy::text::{TextColor, TextFont};
-use bevy::ui::{Node, PositionType, Val};
 use bevy_math::IVec2;
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::{
@@ -316,7 +314,6 @@ fn drive_simulation_if_resolving(world: &mut World) {
 }
 
 fn show_game_over_message(
-    mut commands: Commands<'_, '_>,
     mut hud: Query<'_, '_, &mut Text, (With<HudText>, Without<LogText>)>,
     mut log: Query<'_, '_, &mut Text, (With<LogText>, Without<HudText>)>,
 ) {
@@ -324,35 +321,9 @@ fn show_game_over_message(
 
     if let Some(mut text) = hud.iter_mut().next() {
         *text = Text::new(message);
-    } else {
-        commands.spawn((
-            Text::new(message),
-            TextFont::from_font_size(18.0),
-            TextColor(Color::WHITE),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(16.0),
-                top: Val::Px(12.0),
-                ..default()
-            },
-            HudText,
-        ));
     }
 
     if let Some(mut text) = log.iter_mut().next() {
         *text = Text::new(message);
-    } else {
-        commands.spawn((
-            Text::new(message),
-            TextFont::from_font_size(16.0),
-            TextColor(Color::srgb(0.85, 0.85, 0.85)),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(16.0),
-                bottom: Val::Px(12.0),
-                ..default()
-            },
-            LogText,
-        ));
     }
 }
