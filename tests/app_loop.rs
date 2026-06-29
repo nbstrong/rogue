@@ -6,10 +6,14 @@ use rogue_app::assets::AssetPlugin;
 use rogue_app::game::GamePlugin;
 use rogue_app::game::{HudText, LogText};
 use rogue_app::input::InputPlugin;
+use rogue_app::presentation::PresentationPlugin;
+use rogue_app::ui::GameUiPlugin;
 use rogue_core::actor::components::Health;
+use rogue_core::actor::components::Monster;
 use rogue_core::actor::components::Player;
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::world::map::GridPosition;
+use rogue_core::world::map::LevelMap;
 
 fn build_app() -> App {
     let mut app = App::new();
@@ -17,7 +21,14 @@ fn build_app() -> App {
     app.add_plugins(StatesPlugin);
     app.init_state::<AppState>();
     app.insert_resource(ButtonInput::<KeyCode>::default());
-    app.add_plugins((SimulationPlugin, AssetPlugin, GamePlugin, InputPlugin));
+    app.add_plugins((
+        SimulationPlugin,
+        AssetPlugin,
+        GamePlugin,
+        InputPlugin,
+        PresentationPlugin,
+        GameUiPlugin,
+    ));
     app
 }
 
@@ -38,6 +49,23 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
+
+    let player_position = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+    let player_tile = app
+        .world()
+        .resource::<LevelMap>()
+        .tile(player_position.cell)
+        .expect("player tile");
+    assert!(player_tile.visible);
+    assert!(player_tile.explored);
 
     let before_player = {
         let world = app.world_mut();
@@ -82,6 +110,64 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
+}
+
+#[test]
+fn presentation_plugin_hides_monsters_outside_the_player_fov() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let monster = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<Monster>>()
+            .iter(world)
+            .next()
+            .expect("monster entity")
+    };
+
+    app.world_mut().entity_mut(monster).insert(GridPosition {
+        level: rogue_core::world::map::LevelId(0),
+        cell: IVec2::new(20, 13),
+    });
+
+    app.update();
+
+    let actor_views = app.world().resource::<rogue_app::game::ActorViews>();
+    let view_entity = actor_views
+        .views
+        .get(&monster)
+        .copied()
+        .expect("monster view entity");
+    let visibility = app
+        .world()
+        .entity(view_entity)
+        .get::<Visibility>()
+        .copied()
+        .expect("monster visibility");
+
+    assert_eq!(visibility, Visibility::Hidden);
+
+    let player_position = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+    let player_tile = app
+        .world()
+        .resource::<LevelMap>()
+        .tile(player_position.cell)
+        .expect("player tile");
+    assert!(player_tile.visible);
+    assert!(player_tile.explored);
 }
 
 #[test]
