@@ -1,11 +1,23 @@
 use bevy::prelude::*;
-use bevy::sprite::Sprite;
+use bevy::sprite::Anchor;
+use bevy::text::{FontSize, FontSource, Justify, TextColor, TextFont, TextLayout};
 use bevy_math::{IVec2, Vec3};
 use rogue_core::world::map::LevelId;
 use rogue_core::world::map::LevelMap;
 use rogue_core::world::tile::TileKind;
 
 use crate::game::{MapTileView, MapViews, SessionEntity, TILE_SIZE};
+
+fn tile_glyph(tile: &TileKind) -> &'static str {
+    match tile {
+        TileKind::Floor => ".",
+        TileKind::Wall => "#",
+        TileKind::ClosedDoor => "+",
+        TileKind::OpenDoor => "/",
+        TileKind::StairsUp => "<",
+        TileKind::StairsDown => ">",
+    }
+}
 
 fn tile_color(tile: &TileKind, visible: bool, explored: bool) -> Color {
     let base = match tile {
@@ -33,6 +45,11 @@ pub fn synchronize_map_view(
 ) {
     let half_w = map.width as f32 * TILE_SIZE / 2.0;
     let half_h = map.height as f32 * TILE_SIZE / 2.0;
+    let text_font = TextFont {
+        font: FontSource::Monospace,
+        font_size: FontSize::Px(TILE_SIZE),
+        ..default()
+    };
 
     for y in 0..map.height as i32 {
         for x in 0..map.width as i32 {
@@ -45,18 +62,33 @@ pub fn synchronize_map_view(
                 0.0,
             );
             let color = tile_color(&tile.kind, tile.visible, tile.explored);
+            let glyph = tile_glyph(&tile.kind);
+            let visibility = if tile.visible || tile.explored {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
 
             if let Some(entity) = views.tiles.get(&key).copied() {
                 commands.entity(entity).insert((
+                    Text2d::new(glyph),
+                    text_font.clone(),
+                    TextColor(color),
+                    Anchor::CENTER,
+                    TextLayout::justify(Justify::Center),
                     Transform::from_translation(position),
-                    Sprite::from_color(color, Vec2::splat(TILE_SIZE - 1.0)),
-                    Visibility::Visible,
+                    visibility,
                 ));
             } else {
                 let entity = commands
                     .spawn((
-                        Sprite::from_color(color, Vec2::splat(TILE_SIZE - 1.0)),
+                        Text2d::new(glyph),
+                        text_font.clone(),
+                        TextColor(color),
+                        Anchor::CENTER,
+                        TextLayout::justify(Justify::Center),
                         Transform::from_translation(position),
+                        visibility,
                         MapTileView,
                         SessionEntity,
                     ))

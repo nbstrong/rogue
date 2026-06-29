@@ -40,22 +40,34 @@ The architecture keeps gameplay authoritative in the core simulation and treats 
 
 ## Getting Started
 
-Build the workspace:
+Run the game:
 
 ```bash
-cargo build
+cargo run -p rogue_app --features dev
 ```
 
-Run the tests:
+Run the app integration tests:
 
 ```bash
-cargo test
+cargo test -p rogue_app --features dev
 ```
 
-Run the application:
+Run the core simulation tests:
 
 ```bash
-cargo run -p rogue_app
+cargo test -p rogue_core
+```
+
+Run a specific app test file:
+
+```bash
+cargo test -p rogue_app --features dev --test app_loop
+```
+
+Run a specific core test file:
+
+```bash
+cargo test -p rogue_core --test combat
 ```
 
 ## Design Summary
