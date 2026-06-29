@@ -4,8 +4,10 @@ use bevy_math::IVec2;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::*;
+use rogue_core::item::components::Item;
 use rogue_core::item::effects::EffectQueue;
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus, SimulationStep};
+use rogue_core::time::clock::CurrentActor;
 use rogue_core::time::clock::TurnClock;
 use rogue_core::world::generation::generate_one_room;
 use rogue_core::world::map::{GridPosition, LevelId};
@@ -116,6 +118,194 @@ fn bumping_into_an_enemy_converts_to_damage() {
 
     let health = app.world().entity(monster).get::<Health>().unwrap();
     assert!(health.current < health.maximum);
+}
+
+#[test]
+fn waiting_player_turn_is_preserved_until_action_arrives() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
+    assert_eq!(app.world().resource::<CurrentActor>().0, Some(player));
+
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::Wait,
+    });
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
+    assert!(app.world().resource::<CurrentActor>().0.is_none());
+}
+
+#[test]
+fn moving_over_an_item_does_not_damage_it() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    let item = app
+        .world_mut()
+        .spawn((
+            Item,
+            Health {
+                current: 5,
+                maximum: 5,
+            },
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(2, 3),
+            },
+        ))
+        .id();
+
+    app.world_mut()
+        .resource_mut::<SpatialIndex>()
+        .occupants
+        .entry((LevelId(0), IVec2::new(2, 3)))
+        .or_default()
+        .push(item);
+
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::Move {
+            delta: IVec2::new(0, 1),
+        },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let item_health = app.world().entity(item).get::<Health>().unwrap();
+    assert_eq!(item_health.current, 5);
+
+    let player_position = app.world().entity(player).get::<GridPosition>().unwrap();
+    assert_eq!(player_position.cell, IVec2::new(2, 3));
+}
+
+#[test]
+fn moving_into_a_friendly_blocker_is_rejected() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    let blocker = app
+        .world_mut()
+        .spawn((
+            Actor,
+            Health {
+                current: 6,
+                maximum: 6,
+            },
+            BlocksMovement,
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(2, 3),
+            },
+        ))
+        .id();
+
+    {
+        let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
+        spatial
+            .occupants
+            .entry((LevelId(0), IVec2::new(2, 3)))
+            .or_default()
+            .push(blocker);
+        spatial
+            .movement_blockers
+            .insert((LevelId(0), IVec2::new(2, 3)));
+    }
+
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::Move {
+            delta: IVec2::new(0, 1),
+        },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let blocker_health = app.world().entity(blocker).get::<Health>().unwrap();
+    assert_eq!(blocker_health.current, 6);
+
+    let player_position = app.world().entity(player).get::<GridPosition>().unwrap();
+    assert_eq!(player_position.cell, IVec2::new(2, 2));
+}
+
+#[test]
+fn direct_melee_against_a_distant_target_fails_without_damage() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    let target = app
+        .world_mut()
+        .spawn((
+            Actor,
+            Monster,
+            BlocksMovement,
+            BlocksSight,
+            HostileToPlayer,
+            Health {
+                current: 9,
+                maximum: 9,
+            },
+            CombatStats {
+                power: 1,
+                defense: 0,
+            },
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(5, 5),
+            },
+        ))
+        .id();
+
+    {
+        let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
+        spatial
+            .occupants
+            .entry((LevelId(0), IVec2::new(5, 5)))
+            .or_default()
+            .push(target);
+        spatial
+            .movement_blockers
+            .insert((LevelId(0), IVec2::new(5, 5)));
+        spatial
+            .sight_blockers
+            .insert((LevelId(0), IVec2::new(5, 5)));
+    }
+
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::Melee { target },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let target_health = app.world().entity(target).get::<Health>().unwrap();
+    assert_eq!(target_health.current, 9);
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
 }
 
 #[test]

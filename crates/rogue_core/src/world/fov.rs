@@ -5,7 +5,7 @@ use crate::world::map::GridPosition;
 use crate::world::map::LevelMap;
 use crate::world::tile::TileKind;
 
-fn line_of_sight(map: &LevelMap, from: IVec2, to: IVec2) -> bool {
+pub fn line_of_sight(map: &LevelMap, from: IVec2, to: IVec2) -> bool {
     let mut x0 = from.x;
     let mut y0 = from.y;
     let x1 = to.x;

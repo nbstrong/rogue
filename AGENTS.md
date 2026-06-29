@@ -1,6 +1,7 @@
 # Agent Instructions
 
 ## Repository Access
+https://github.com/nbstrong/rogue
 
 * Always use the GitHub connector when interacting with the repository.
 * Only perform read actions on the repository unless the user explicitly requests a repository write.
