@@ -1,0 +1,24 @@
+# AI
+.agents/
+.codex/
+
+# Rust build output
+target/
+**/target/
+
+# Cargo
+**/*.rs.bk
+
+# Editor settings
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Local logs / temp files
+*.log
+*.tmp
+*.swp
+*.swo

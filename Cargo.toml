@@ -1,0 +1,31 @@
+[package]
+name = "rogue"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [
+    ".",
+    "crates/rogue_core",
+    "crates/rogue_app",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+bevy = "0.19"
+bevy_app = "0.19"
+bevy_ecs = "0.19"
+bevy_math = "0.19"
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+
+[dependencies]
+rogue_core = { path = "crates/rogue_core" }
+
+[dev-dependencies]
+bevy = { workspace = true }
+bevy_math = { workspace = true }
