@@ -79,11 +79,11 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyL);
+        .press(KeyCode::Numpad6);
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyL);
+        .release(KeyCode::Numpad6);
 
     let after_player = {
         let world = app.world_mut();

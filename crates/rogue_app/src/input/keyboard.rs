@@ -6,7 +6,22 @@ use rogue_core::simulation::SimulationStatus;
 
 use crate::app_state::{AppState, CurrentInputMode, InputMode};
 
-fn key_to_delta(key: KeyCode) -> Option<IVec2> {
+fn numpad_key_to_delta(key: KeyCode) -> Option<IVec2> {
+    match key {
+        KeyCode::Numpad7 => Some(IVec2::new(-1, 1)),
+        KeyCode::Numpad8 => Some(IVec2::new(0, 1)),
+        KeyCode::Numpad9 => Some(IVec2::new(1, 1)),
+        KeyCode::Numpad4 => Some(IVec2::new(-1, 0)),
+        KeyCode::Numpad5 => None,
+        KeyCode::Numpad6 => Some(IVec2::new(1, 0)),
+        KeyCode::Numpad1 => Some(IVec2::new(-1, -1)),
+        KeyCode::Numpad2 => Some(IVec2::new(0, -1)),
+        KeyCode::Numpad3 => Some(IVec2::new(1, -1)),
+        _ => None,
+    }
+}
+
+fn backup_key_to_delta(key: KeyCode) -> Option<IVec2> {
     match key {
         KeyCode::KeyH => Some(IVec2::new(-1, 0)),
         KeyCode::KeyJ => Some(IVec2::new(0, -1)),
@@ -35,14 +50,19 @@ pub fn capture_keyboard_input(
         return;
     };
 
-    let action = if keys.just_pressed(KeyCode::Space) {
-        Some(ActionKind::Wait)
-    } else {
-        keys.get_just_pressed()
-            .copied()
-            .find_map(key_to_delta)
-            .map(|delta| ActionKind::Move { delta })
-    };
+    let action = keys
+        .get_just_pressed()
+        .copied()
+        .find_map(numpad_key_to_delta)
+        .or_else(|| keys.get_just_pressed().copied().find_map(backup_key_to_delta))
+        .map(|delta| ActionKind::Move { delta })
+        .or_else(|| {
+            if keys.just_pressed(KeyCode::Numpad5) || keys.just_pressed(KeyCode::Space) {
+                Some(ActionKind::Wait)
+            } else {
+                None
+            }
+        });
 
     if let Some(kind) = action {
         queue.push(Action {
