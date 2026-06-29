@@ -1,0 +1,3 @@
+- Always use the github connector tool when interacting with the repository.
+- Only perform read actions on the repository.
+- Do not perform source control. The user will handle that.

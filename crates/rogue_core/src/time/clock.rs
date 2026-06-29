@@ -50,6 +50,10 @@ impl TurnClock {
     pub fn pop_next(&mut self) -> Option<ScheduledActor> {
         self.timeline.pop().map(|entry| entry.0)
     }
+
+    pub fn peek_next(&self) -> Option<&ScheduledActor> {
+        self.timeline.peek().map(|entry| &entry.0)
+    }
 }
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]

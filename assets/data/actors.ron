@@ -1,0 +1,23 @@
+[
+    (
+        id: "player",
+        name: "Player",
+        glyph: '@',
+        maximum_health: 10,
+        power: 3,
+        defense: 1,
+        vision_range: 8,
+        action_speed: 100,
+    ),
+    (
+        id: "ogre",
+        name: "Ogre",
+        glyph: 'O',
+        maximum_health: 6,
+        power: 2,
+        defense: 0,
+        vision_range: 8,
+        action_speed: 120,
+    ),
+]
+

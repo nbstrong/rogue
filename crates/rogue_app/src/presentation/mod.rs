@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::state::condition::in_state;
+use crate::app_state::AppState;
 
 pub mod actor_view;
 pub mod animation;
@@ -18,8 +20,8 @@ impl Plugin for PresentationPlugin {
                 camera::update_camera,
                 animation::update_animations,
                 synchronization::synchronize_presentation,
-            ),
+            )
+                .run_if(in_state(AppState::Playing)),
         );
     }
 }
-

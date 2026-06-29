@@ -29,3 +29,4 @@ rogue_core = { path = "crates/rogue_core" }
 [dev-dependencies]
 bevy = { workspace = true }
 bevy_math = { workspace = true }
+rogue_app = { path = "crates/rogue_app" }
