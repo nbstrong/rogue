@@ -54,7 +54,11 @@ pub fn capture_keyboard_input(
         .get_just_pressed()
         .copied()
         .find_map(numpad_key_to_delta)
-        .or_else(|| keys.get_just_pressed().copied().find_map(backup_key_to_delta))
+        .or_else(|| {
+            keys.get_just_pressed()
+                .copied()
+                .find_map(backup_key_to_delta)
+        })
         .map(|delta| ActionKind::Move { delta })
         .or_else(|| {
             if keys.just_pressed(KeyCode::Numpad5) || keys.just_pressed(KeyCode::Space) {
