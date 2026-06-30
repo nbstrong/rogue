@@ -76,7 +76,7 @@ impl StableIdTag for PersistentTag {}
 pub type ActorId = SimId<ActorTag>;
 pub type ItemId = SimId<ItemTag>;
 
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct IdAllocator<Tag> {
     next_id: u64,
     #[serde(skip)]
@@ -109,6 +109,30 @@ impl<Tag> IdAllocator<Tag> {
 
     pub fn set_next_available(&mut self, next_id: u64) {
         self.next_id = next_id.max(1);
+    }
+}
+
+impl<'de, Tag> Deserialize<'de> for IdAllocator<Tag> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct IdAllocatorSnapshot {
+            next_id: u64,
+        }
+
+        let snapshot = IdAllocatorSnapshot::deserialize(deserializer)?;
+        if snapshot.next_id == 0 {
+            return Err(serde::de::Error::custom(
+                "allocator next_id must be at least 1",
+            ));
+        }
+
+        Ok(Self {
+            next_id: snapshot.next_id,
+            marker: PhantomData,
+        })
     }
 }
 

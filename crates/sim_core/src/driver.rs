@@ -13,6 +13,18 @@ pub enum Cadence {
     Strategic,
 }
 
+impl Cadence {
+    pub fn rank(self) -> u8 {
+        match self {
+            Cadence::Tactical => 0,
+            Cadence::Minute => 1,
+            Cadence::Hour => 2,
+            Cadence::Day => 3,
+            Cadence::Strategic => 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DueWork<Id> {
     pub cadence: Cadence,
@@ -23,12 +35,18 @@ pub struct DueWork<Id> {
 
 impl<Id: Ord> Ord for DueWork<Id> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.cadence, self.due_minute, self.sequence, &self.id).cmp(&(
-            other.cadence,
-            other.due_minute,
-            other.sequence,
-            &other.id,
-        ))
+        (
+            self.due_minute,
+            self.cadence.rank(),
+            self.sequence,
+            &self.id,
+        )
+            .cmp(&(
+                other.due_minute,
+                other.cadence.rank(),
+                other.sequence,
+                &other.id,
+            ))
     }
 }
 
@@ -75,6 +93,7 @@ pub struct DeterministicDriver<Id> {
     pub budget: SimulationWorkBudget,
     pub progress: WorkBudgetProgress,
     pub backlog: WorkBacklog<Id>,
+    pending_target_minute: Option<u64>,
 }
 
 impl<Id> Default for DeterministicDriver<Id> {
@@ -84,6 +103,7 @@ impl<Id> Default for DeterministicDriver<Id> {
             budget: SimulationWorkBudget::default(),
             progress: WorkBudgetProgress::default(),
             backlog: WorkBacklog::default(),
+            pending_target_minute: None,
         }
     }
 }
@@ -95,6 +115,9 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
 
     pub fn begin_frame(&mut self) {
         self.progress = WorkBudgetProgress::default();
+        if self.pending_target_minute.is_none() {
+            self.pending_target_minute = Some(self.target_minute());
+        }
     }
 
     pub fn target_minute(&self) -> u64 {
@@ -107,7 +130,10 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
     where
         F: FnMut(DueWork<Id>) -> usize,
     {
-        let target = self.target_minute();
+        let target = self
+            .pending_target_minute
+            .unwrap_or_else(|| self.target_minute());
+        let mut processed_minute = self.clock.minute;
         while !self.budget.exhausted(&self.progress) {
             let Some(next) = self.backlog.peek().copied() else {
                 break;
@@ -117,8 +143,8 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             }
 
             let work = self.backlog.pop().expect("backlog peek/pop mismatch");
-            if self.clock.minute < work.due_minute {
-                self.clock.minute = work.due_minute;
+            if processed_minute < work.due_minute {
+                processed_minute = work.due_minute;
             }
 
             let produced = apply(work);
@@ -126,7 +152,22 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             self.progress.consume_domain_events(produced.max(1));
         }
 
-        self.clock.minute = target.max(self.clock.minute);
+        let exhausted = self.budget.exhausted(&self.progress);
+        if self.backlog.peek().is_none()
+            || self
+                .backlog
+                .peek()
+                .is_some_and(|next| next.due_minute > target)
+        {
+            self.clock.minute = target.max(processed_minute);
+            self.pending_target_minute = None;
+        } else if exhausted {
+            self.clock.minute = processed_minute;
+            self.pending_target_minute = Some(target);
+        } else {
+            self.clock.minute = processed_minute;
+            self.pending_target_minute = Some(target);
+        }
     }
 }
 

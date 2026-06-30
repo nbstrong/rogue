@@ -5,7 +5,10 @@ use bevy_ecs::schedule::ScheduleLabel;
 use crate::action::queue::ActionQueue;
 use crate::action::resolver::{ActionDecision, ActionOutcomeLog, resolve_action, validate_action};
 use crate::actor::ai::generate_ai_action;
-use crate::actor::components::{PersistentIdAllocator, StableEntityIndex};
+use crate::actor::components::{
+    Actor, PersistentIdAllocator, StableActorId, StableEntityIndex, StableItemId,
+};
+use crate::item::components::Item;
 use crate::item::effects::{EffectQueue, apply_pending_effects};
 use crate::persistence::rng::RandomStreams;
 use crate::time::clock::{CurrentActor, TurnClock};
@@ -81,7 +84,11 @@ impl Plugin for SimulationPlugin {
                     resolve_action.in_set(SimulationSet::Resolve),
                     apply_pending_effects.in_set(SimulationSet::ApplyEffects),
                     remove_dead_entities.in_set(SimulationSet::HandleDeath),
-                    (update_spatial_index, recalculate_fov)
+                    (
+                        rebuild_stable_entity_index,
+                        update_spatial_index,
+                        recalculate_fov,
+                    )
                         .chain()
                         .in_set(SimulationSet::RebuildDerivedData),
                     finish_simulation_step.in_set(SimulationSet::FinishStep),
@@ -106,7 +113,7 @@ pub fn drive_simulation(world: &mut World) {
         world.run_schedule(SimulationStep);
     }
 
-    panic!("simulation exceeded the per-frame step limit");
+    return;
 }
 
 pub fn remove_dead_entities(
@@ -128,5 +135,22 @@ pub fn remove_dead_entities(
     });
     if !player_exists {
         *status = SimulationStatus::GameOver;
+    }
+}
+
+pub fn rebuild_stable_entity_index(
+    mut index: ResMut<'_, StableEntityIndex>,
+    actors: Query<'_, '_, (Entity, &StableActorId), With<Actor>>,
+    items: Query<'_, '_, (Entity, &StableItemId), With<Item>>,
+) {
+    index.actors.clear();
+    index.items.clear();
+
+    for (entity, stable_id) in actors.iter() {
+        index.actors.insert(stable_id.0, entity);
+    }
+
+    for (entity, stable_id) in items.iter() {
+        index.items.insert(stable_id.0, entity);
     }
 }

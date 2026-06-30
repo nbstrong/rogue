@@ -51,17 +51,15 @@ fn sim_clock_advances_and_respects_pause() {
     clock.set_speed(SimSpeed::Paused);
     clock.advance_minutes(30);
     assert_eq!(clock.minute, 15);
-    assert!(clock.paused);
+    assert!(clock.is_paused());
 }
 
 #[test]
 fn work_budget_continues_without_reordering() {
-    let mut driver = DeterministicDriver::<u64> {
-        budget: SimulationWorkBudget {
-            maximum_steps_per_frame: 1,
-            maximum_domain_events_per_frame: 2,
-        },
-        ..Default::default()
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 1,
+        maximum_domain_events_per_frame: 2,
     };
     driver.clock.speed = SimSpeed::Normal;
     driver.enqueue(DueWork {
@@ -92,7 +90,44 @@ fn work_budget_continues_without_reordering() {
         });
     }
 
-    assert_eq!(processed, vec![1, 4, 2]);
+    assert_eq!(processed, vec![1, 2, 4]);
+}
+
+#[test]
+fn work_budget_orders_same_minute_by_cadence_then_sequence() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 8,
+        maximum_domain_events_per_frame: 8,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 0,
+        sequence: 3,
+        id: 3,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Tactical,
+        due_minute: 0,
+        sequence: 2,
+        id: 2,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Tactical,
+        due_minute: 0,
+        sequence: 1,
+        id: 1,
+    });
+
+    let mut processed = Vec::new();
+    driver.begin_frame();
+    driver.run_frame(|work| {
+        processed.push(work.id);
+        1
+    });
+
+    assert_eq!(processed, vec![1, 2, 3]);
 }
 
 #[test]
@@ -159,5 +194,11 @@ fn allocator_exhaustion_is_explicit() {
 #[test]
 fn zero_ids_are_rejected_during_deserialization() {
     let result = ron::from_str::<sim_core::SimId<ActorTag>>("0");
+    assert!(result.is_err());
+}
+
+#[test]
+fn allocator_deserialization_rejects_zero_state() {
+    let result = ron::from_str::<IdAllocator<ActorTag>>("IdAllocator(next_id: 0)");
     assert!(result.is_err());
 }
