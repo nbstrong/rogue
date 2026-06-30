@@ -14,6 +14,7 @@ pub struct GridPosition {
 
 #[derive(Resource, Debug, Clone)]
 pub struct LevelMap {
+    pub id: LevelId,
     pub width: u32,
     pub height: u32,
     pub tiles: Vec<Tile>,
@@ -21,8 +22,13 @@ pub struct LevelMap {
 
 impl LevelMap {
     pub fn new(width: u32, height: u32, fill: TileKind) -> Self {
+        Self::with_id(LevelId(0), width, height, fill)
+    }
+
+    pub fn with_id(id: LevelId, width: u32, height: u32, fill: TileKind) -> Self {
         let tile = Tile::new(fill);
         Self {
+            id,
             width,
             height,
             tiles: vec![tile; width as usize * height as usize],

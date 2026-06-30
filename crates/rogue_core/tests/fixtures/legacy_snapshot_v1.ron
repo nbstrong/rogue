@@ -1,0 +1,71 @@
+(
+    version: 1,
+    root_seed: 0,
+    current_level: 0,
+    current_tick: 0,
+    current_actor: None,
+    simulation_status: WaitingForPlayer,
+    persistent_ids: (
+        next_available: 2,
+    ),
+    levels: [
+        (
+            id: 0,
+            width: 1,
+            height: 1,
+            tiles: [
+                (
+                    kind: Floor,
+                    explored: false,
+                    visible: false,
+                ),
+            ],
+        ),
+    ],
+    entities: [
+        (
+            id: 1,
+            prototype: "player",
+            actor: true,
+            player: true,
+            monster: false,
+            item: false,
+            blocks_movement: true,
+            blocks_sight: true,
+            hostile_to_player: false,
+            position: Some((
+                level: 0,
+                x: 0,
+                y: 0,
+            )),
+            health: Some((
+                current: 10,
+                maximum: 10,
+            )),
+            combat_stats: Some((
+                power: 3,
+                defense: 1,
+            )),
+            vision: Some((
+                range: 8,
+            )),
+            action_speed: Some((
+                ticks_per_action: 100,
+            )),
+            inventory: None,
+            carried_by: None,
+            ai_goal: None,
+            last_known_player_position: None,
+        ),
+    ],
+    timeline: [],
+    pending_actions: [],
+    pending_effects: [],
+    rng: (
+        seed: 0,
+        generation_state: 1,
+        combat_state: 2,
+        loot_state: 3,
+        ai_state: 4,
+    ),
+)

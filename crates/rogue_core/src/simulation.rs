@@ -5,7 +5,9 @@ use bevy_ecs::schedule::ScheduleLabel;
 use crate::action::queue::ActionQueue;
 use crate::action::resolver::{ActionDecision, ActionOutcomeLog, resolve_action, validate_action};
 use crate::actor::ai::generate_ai_action;
+use crate::actor::components::PersistentIdAllocator;
 use crate::item::effects::{EffectQueue, apply_pending_effects};
+use crate::persistence::rng::RandomStreams;
 use crate::time::clock::{CurrentActor, TurnClock};
 use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
@@ -50,6 +52,8 @@ impl Plugin for SimulationPlugin {
             .init_resource::<TurnClock>()
             .init_resource::<CurrentActor>()
             .init_resource::<SpatialIndex>()
+            .init_resource::<RandomStreams>()
+            .init_resource::<PersistentIdAllocator>()
             .init_resource::<SimulationStatus>()
             .configure_sets(
                 SimulationStep,

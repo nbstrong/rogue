@@ -1,20 +1,22 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::{
-    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
-    PersistentId, Player, PrototypeId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
 use rogue_core::content::definitions::ActorDefinition;
 use rogue_core::content::registry::ContentRegistry;
+use rogue_core::item::components::{Inventory, Item};
 use rogue_core::item::effects::EffectQueue;
+use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::simulation::SimulationStatus;
 use rogue_core::time::clock::{CurrentActor, TurnClock};
 use rogue_core::world::fov::recalculate_fov_for_player;
-use rogue_core::world::generation::generate_one_room;
+use rogue_core::world::generation::generate_one_room_with_rng;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
 
@@ -62,9 +64,6 @@ pub struct GameRootState {
     pub initialized: bool,
 }
 
-#[derive(Resource, Default)]
-pub struct PersistentIdCounter(pub u64);
-
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
@@ -74,8 +73,9 @@ impl Plugin for GamePlugin {
             .init_resource::<HealthSnapshot>()
             .init_resource::<CombatLog>()
             .init_resource::<GameRootState>()
-            .init_resource::<PersistentIdCounter>()
             .init_resource::<CurrentInputMode>()
+            .init_resource::<PersistentIdAllocator>()
+            .init_resource::<RandomStreams>()
             .add_systems(Startup, bootstrap_game)
             .add_systems(
                 Update,
@@ -113,11 +113,20 @@ fn spawn_camera_if_needed(world: &mut World) {
 
 pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     if clear_existing {
-        let session_entities: Vec<Entity> = world
+        let mut cleanup = HashSet::new();
+        for entity in world
             .query_filtered::<Entity, With<SessionEntity>>()
             .iter(world)
-            .collect();
-        for entity in session_entities {
+        {
+            cleanup.insert(entity);
+        }
+        for entity in world
+            .query_filtered::<Entity, With<PersistentId>>()
+            .iter(world)
+        {
+            cleanup.insert(entity);
+        }
+        for entity in cleanup {
             let _ = world.despawn(entity);
         }
     }
@@ -131,6 +140,8 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.remove_resource::<ActionDecision>();
     world.remove_resource::<ActionOutcomeLog>();
     world.remove_resource::<CurrentActor>();
+    world.insert_resource(RandomStreams::seeded(0));
+    world.insert_resource(PersistentIdAllocator::default());
 
     let player_def = world
         .resource::<ContentRegistry>()
@@ -146,16 +157,48 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
         .unwrap_or_else(|| panic!("missing ogre definition"));
 
     let level = LevelId(0);
-    let mut map = generate_one_room(21, 15);
+    let mut map = {
+        let mut rng = world.resource_mut::<RandomStreams>();
+        generate_one_room_with_rng(21, 15, Some(&mut *rng))
+    };
     let player_cell = IVec2::new(3, 7);
     let monster_cell = IVec2::new(8, 7);
 
     let player = spawn_actor(world, &player_def, level, player_cell, true, false);
     let monster = spawn_actor(world, &monster_def, level, monster_cell, false, true);
 
+    let loot_cell = {
+        let mut rng = world.resource_mut::<RandomStreams>();
+        let interior_width = map.width as usize - 2;
+        let interior_height = map.height as usize - 2;
+        let total_cells = interior_width * interior_height;
+        let mut candidate_index = (rng.next_generation_u64() as usize) % total_cells;
+        let mut cell = IVec2::new(1, 1);
+        for _ in 0..total_cells {
+            let x = 1 + (candidate_index % interior_width) as i32;
+            let y = 1 + (candidate_index / interior_width) as i32;
+            cell = IVec2::new(x, y);
+            if cell != player_cell && cell != monster_cell {
+                break;
+            }
+            candidate_index = (candidate_index + 1) % total_cells;
+        }
+        cell
+    };
+    let loot_name = {
+        let mut rng = world.resource_mut::<RandomStreams>();
+        if rng.next_loot_u64() & 1 == 0 {
+            "healing_potion"
+        } else {
+            "trinket"
+        }
+    };
+    let loot = spawn_loot_item(world, level, loot_cell, loot_name);
+
     let mut spatial = SpatialIndex::default();
     insert_occupant(&mut spatial, level, player_cell, player, true, true);
     insert_occupant(&mut spatial, level, monster_cell, monster, true, true);
+    insert_occupant(&mut spatial, level, loot_cell, loot, false, false);
 
     if let Some((_, vision)) = world
         .query_filtered::<(&GridPosition, &Vision), With<Player>>()
@@ -247,6 +290,7 @@ fn spawn_actor(
             current: definition.maximum_health,
             maximum: definition.maximum_health,
         },
+        ActiveStatuses::default(),
         CombatStats {
             power: definition.power,
             defense: definition.defense,
@@ -265,6 +309,7 @@ fn spawn_actor(
 
     if is_player {
         entity.insert(Player);
+        entity.insert(Inventory::new(8));
     }
     if hostile {
         entity.insert((Monster, HostileToPlayer));
@@ -273,12 +318,24 @@ fn spawn_actor(
     entity.id()
 }
 
+fn spawn_loot_item(world: &mut World, level: LevelId, cell: IVec2, prototype: &str) -> Entity {
+    let persistent_id = next_persistent_id(world);
+    world
+        .spawn((
+            Item,
+            PrototypeId(prototype.to_string()),
+            GridPosition { level, cell },
+            PersistentId(persistent_id),
+            SessionEntity,
+        ))
+        .id()
+}
+
 fn next_persistent_id(world: &mut World) -> u64 {
-    let mut counter = world
-        .get_resource_mut::<PersistentIdCounter>()
-        .expect("persistent id counter");
-    counter.0 += 1;
-    counter.0
+    let mut allocator = world
+        .get_resource_mut::<PersistentIdAllocator>()
+        .expect("persistent id allocator");
+    allocator.allocate().0
 }
 
 fn insert_occupant(

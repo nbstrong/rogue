@@ -24,6 +24,7 @@ bevy = {
 bevy_app = "0.19"
 bevy_ecs = "0.19"
 bevy_math = "0.19"
+blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 

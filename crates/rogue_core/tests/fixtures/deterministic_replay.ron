@@ -1,0 +1,12 @@
+(
+    seed: 0,
+    commands: [
+        PickUp(item: 3),
+        UseItem(item: 3, target: SelfTarget),
+        Move(dx: 1, dy: 0),
+        Move(dx: 1, dy: 0),
+        Move(dx: 1, dy: 0),
+        Wait,
+    ],
+    expected_digest: "a2bf4a421ff43442ec88aa1bb6eac4d138ee06f15947139e3f30106d86176376",
+)

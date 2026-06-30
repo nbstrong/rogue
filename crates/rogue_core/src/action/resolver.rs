@@ -5,8 +5,12 @@ use crate::action::intent::{Action, ActionKind, ActionTarget};
 use crate::action::queue::ActionQueue;
 use crate::action::schedule::action_cost;
 use crate::actor::combat::{DamageKind, melee_damage};
-use crate::actor::components::{ActionSpeed, BlocksMovement, CombatStats, Health, Monster, Player};
+use crate::actor::components::{
+    ActionSpeed, BlocksMovement, CombatStats, Health, Monster, Player, PrototypeId,
+};
+use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
+use crate::persistence::rng::RandomStreams;
 use crate::simulation::SimulationStatus;
 use crate::time::clock::TurnClock;
 use crate::world::fov::line_of_sight;
@@ -95,6 +99,9 @@ fn actor_flags(
             Option<&BlocksMovement>,
             Option<&crate::actor::components::HostileToPlayer>,
             Option<&CombatStats>,
+            Option<&Item>,
+            Option<&CarriedBy>,
+            Option<&PrototypeId>,
         ),
     >,
     entity: Entity,
@@ -108,7 +115,19 @@ fn actor_flags(
     Option<CombatStats>,
 )> {
     positions.get(entity).ok().map(
-        |(_, position, player, monster, health, blocks_movement, hostile, stats)| {
+        |(
+            _,
+            position,
+            player,
+            monster,
+            health,
+            blocks_movement,
+            hostile,
+            stats,
+            _item,
+            _carried_by,
+            _prototype,
+        )| {
             (
                 *position,
                 player.is_some(),
@@ -153,6 +172,9 @@ fn find_valid_move_collision(
             Option<&BlocksMovement>,
             Option<&crate::actor::components::HostileToPlayer>,
             Option<&CombatStats>,
+            Option<&Item>,
+            Option<&CarriedBy>,
+            Option<&PrototypeId>,
         ),
     >,
     spatial: &SpatialIndex,
@@ -174,6 +196,9 @@ fn find_valid_move_collision(
             occupant_blocks_movement,
             occupant_hostile,
             occupant_stats,
+            _item,
+            _carried_by,
+            _prototype,
         )) = positions.get(occupant)
         else {
             continue;
@@ -213,6 +238,7 @@ pub fn validate_action(
     mut status: ResMut<'_, SimulationStatus>,
     map: Res<'_, LevelMap>,
     spatial: Res<'_, SpatialIndex>,
+    inventories: Query<'_, '_, &Inventory>,
     positions: Query<
         '_,
         '_,
@@ -225,6 +251,9 @@ pub fn validate_action(
             Option<&BlocksMovement>,
             Option<&crate::actor::components::HostileToPlayer>,
             Option<&CombatStats>,
+            Option<&Item>,
+            Option<&CarriedBy>,
+            Option<&PrototypeId>,
         ),
     >,
 ) {
@@ -278,6 +307,7 @@ pub fn validate_action(
         current_is_player,
         current_is_hostile_to_player,
         &positions,
+        &inventories,
     );
     *decision = match validation {
         Ok(()) => ActionDecision::Ready(action.clone()),
@@ -305,13 +335,18 @@ pub fn resolve_action(
             Option<&BlocksMovement>,
             Option<&crate::actor::components::HostileToPlayer>,
             Option<&CombatStats>,
+            Option<&Item>,
+            Option<&CarriedBy>,
+            Option<&PrototypeId>,
         ),
     >,
     speeds: Query<'_, '_, &ActionSpeed>,
+    mut inventories: Query<'_, '_, &mut Inventory>,
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
     mut turn_clock: ResMut<'_, TurnClock>,
     mut decision: ResMut<'_, ActionDecision>,
     mut outcomes: ResMut<'_, ActionOutcomeLog>,
+    mut rng: ResMut<'_, RandomStreams>,
 ) {
     let Some(current_actor) = current_actor else {
         return;
@@ -339,6 +374,14 @@ pub fn resolve_action(
 
     let actor_speed = scheduled_speed(&speeds, action.actor);
     let should_reschedule = !matches!(failure, Some(ActionFailure::ActorUnavailable));
+
+    if let Some(failure) = failure {
+        if should_reschedule {
+            schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+        }
+        outcomes.push(ActionOutcome::Failed { action, failure });
+        return;
+    }
 
     match action.kind.clone() {
         ActionKind::Wait => {
@@ -403,8 +446,19 @@ pub fn resolve_action(
                             &positions,
                             &spatial,
                         ) {
-                            if let Some((_, target_position, _, _, _, _, _, target_stats)) =
-                                positions.get(target).ok()
+                            if let Some((
+                                _,
+                                target_position,
+                                _,
+                                _,
+                                _,
+                                _,
+                                _,
+                                target_stats,
+                                _,
+                                _,
+                                _,
+                            )) = positions.get(target).ok()
                             {
                                 if let (Some(attacker_stats), Some(target_stats)) =
                                     (attacker_stats, target_stats.copied())
@@ -412,7 +466,11 @@ pub fn resolve_action(
                                     effects.0.push_back(Effect::Damage {
                                         source: Some(action.actor),
                                         target,
-                                        amount: melee_damage(attacker_stats, target_stats),
+                                        amount: melee_damage(
+                                            attacker_stats,
+                                            target_stats,
+                                            Some(&mut rng),
+                                        ),
                                         kind: DamageKind::Melee,
                                     });
                                 }
@@ -440,7 +498,7 @@ pub fn resolve_action(
                             .all(|occupant| {
                                 positions.get(occupant).map_or(
                                     true,
-                                    |(_, _, _, _, _, blocks_movement, _, _)| {
+                                    |(_, _, _, _, _, blocks_movement, _, _, _, _, _)| {
                                         blocks_movement.is_none()
                                     },
                                 )
@@ -549,7 +607,7 @@ pub fn resolve_action(
                     effects.0.push_back(Effect::Damage {
                         source: Some(action.actor),
                         target,
-                        amount: melee_damage(attacker_stats, target_stats),
+                        amount: melee_damage(attacker_stats, target_stats, Some(&mut rng)),
                         kind: DamageKind::Melee,
                     });
                 }
@@ -559,11 +617,98 @@ pub fn resolve_action(
                 schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
             }
         }
-        ActionKind::PickUp { .. }
-        | ActionKind::Drop { .. }
-        | ActionKind::UseItem { .. }
-        | ActionKind::Descend
-        | ActionKind::Ascend => {
+        ActionKind::PickUp { item } => {
+            let Some(mut inventory) = inventories.get_mut(action.actor).ok() else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            if inventory.is_full() {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::InventoryFull,
+                });
+                return;
+            }
+            if !inventory.items.contains(&item) {
+                inventory.items.push(item);
+            }
+            commands.entity(item).insert(CarriedBy(action.actor));
+            if should_reschedule {
+                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            }
+        }
+        ActionKind::Drop { item } => {
+            let Some(mut inventory) = inventories.get_mut(action.actor).ok() else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(index) = inventory.items.iter().position(|entry| *entry == item) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            inventory.items.remove(index);
+            if let Some((_, actor_position, _, _, _, _, _, _, _, _, _)) =
+                positions.get(action.actor).ok()
+            {
+                commands.entity(item).insert(*actor_position);
+            }
+            commands.entity(item).remove::<CarriedBy>();
+            if should_reschedule {
+                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            }
+        }
+        ActionKind::UseItem { item, target } => {
+            let Some(mut inventory) = inventories.get_mut(action.actor).ok() else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(index) = inventory.items.iter().position(|entry| *entry == item) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let prototype = positions
+                .get(item)
+                .ok()
+                .and_then(|(_, _, _, _, _, _, _, _, _, _, prototype)| {
+                    prototype.map(|prototype| prototype.0.clone())
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            inventory.items.remove(index);
+            commands.entity(item).despawn();
+
+            let use_target_is_self = match target {
+                ActionTarget::SelfTarget => true,
+                ActionTarget::Entity(entity) => entity == action.actor,
+                _ => false,
+            };
+            if use_target_is_self {
+                let amount = if prototype == "healing_potion" { 3 } else { 1 };
+                effects.0.push_back(Effect::Heal {
+                    target: action.actor,
+                    amount,
+                });
+            }
+
+            if should_reschedule {
+                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            }
+        }
+        ActionKind::Descend | ActionKind::Ascend => {
             if should_reschedule {
                 schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
             }
@@ -589,6 +734,9 @@ fn target_flags(
             Option<&BlocksMovement>,
             Option<&crate::actor::components::HostileToPlayer>,
             Option<&CombatStats>,
+            Option<&Item>,
+            Option<&CarriedBy>,
+            Option<&PrototypeId>,
         ),
     >,
     entity: Entity,
@@ -602,7 +750,19 @@ fn target_flags(
     Option<CombatStats>,
 )> {
     positions.get(entity).ok().map(
-        |(_, position, player, monster, health, blocks_movement, hostile, stats)| {
+        |(
+            _,
+            position,
+            player,
+            monster,
+            health,
+            blocks_movement,
+            hostile,
+            stats,
+            _item,
+            _carried_by,
+            _prototype,
+        )| {
             (
                 *position,
                 player.is_some(),
@@ -647,8 +807,12 @@ fn validate_action_kind(
             Option<&BlocksMovement>,
             Option<&crate::actor::components::HostileToPlayer>,
             Option<&CombatStats>,
+            Option<&Item>,
+            Option<&CarriedBy>,
+            Option<&PrototypeId>,
         ),
     >,
+    inventories: &Query<'_, '_, &Inventory>,
 ) -> Result<(), ActionFailure> {
     match &action.kind {
         ActionKind::Wait => Ok(()),
@@ -689,14 +853,13 @@ fn validate_action_kind(
                 return Ok(());
             }
 
-            let has_blocker =
-                spatial
-                    .occupants_at(actor_position.level, destination.cell)
-                    .any(|occupant| {
-                        positions.get(occupant).is_ok_and(
-                            |(_, _, _, _, _, blocks_movement, _, _)| blocks_movement.is_some(),
-                        )
-                    });
+            let has_blocker = spatial
+                .occupants_at(actor_position.level, destination.cell)
+                .any(|occupant| {
+                    positions.get(occupant).is_ok_and(
+                        |(_, _, _, _, _, blocks_movement, _, _, _, _, _)| blocks_movement.is_some(),
+                    )
+                });
 
             if has_blocker {
                 Err(ActionFailure::Blocked)
@@ -761,11 +924,81 @@ fn validate_action_kind(
 
             Ok(())
         }
-        ActionKind::PickUp { .. }
-        | ActionKind::Drop { .. }
-        | ActionKind::UseItem { .. }
-        | ActionKind::Descend
-        | ActionKind::Ascend => Err(ActionFailure::Unsupported),
+        ActionKind::PickUp { item } => {
+            let Some((_, actor_position, _, _, _, _, _, _, _, _, _)) =
+                positions.get(action.actor).ok()
+            else {
+                return Err(ActionFailure::ActorUnavailable);
+            };
+            let Some((_, item_position, _, _, _, _, _, _, Some(_), carried_by, _)) =
+                positions.get(*item).ok()
+            else {
+                return Err(ActionFailure::InvalidTarget);
+            };
+
+            if carried_by.is_some() {
+                return Err(ActionFailure::MissingItem);
+            }
+
+            let Some(inventory) = inventories.get(action.actor).ok() else {
+                return Err(ActionFailure::MissingItem);
+            };
+            if inventory.is_full() {
+                return Err(ActionFailure::InventoryFull);
+            }
+
+            if actor_position.level != item_position.level
+                || actor_position.cell != item_position.cell
+            {
+                return Err(ActionFailure::InvalidTarget);
+            }
+
+            Ok(())
+        }
+        ActionKind::Drop { item } => {
+            let Some((_, actor_position, _, _, _, _, _, _, _, _, _)) =
+                positions.get(action.actor).ok()
+            else {
+                return Err(ActionFailure::ActorUnavailable);
+            };
+            let Some((_, item_position, _, _, _, _, _, _, Some(_), carried_by, _)) =
+                positions.get(*item).ok()
+            else {
+                return Err(ActionFailure::InvalidTarget);
+            };
+
+            if carried_by.map(|carried| carried.0) != Some(action.actor) {
+                return Err(ActionFailure::MissingItem);
+            }
+            if inventories.get(action.actor).is_err() {
+                return Err(ActionFailure::MissingItem);
+            }
+            if actor_position.level != item_position.level {
+                return Err(ActionFailure::InvalidTarget);
+            }
+            Ok(())
+        }
+        ActionKind::UseItem { item, target } => {
+            let Some((_, _, _, _, _, _, _, _, _, _, _)) = positions.get(action.actor).ok() else {
+                return Err(ActionFailure::ActorUnavailable);
+            };
+            let Some((_, _, _, _, _, _, _, _, Some(_), carried_by, _)) = positions.get(*item).ok()
+            else {
+                return Err(ActionFailure::InvalidTarget);
+            };
+            if inventories.get(action.actor).is_err() {
+                return Err(ActionFailure::MissingItem);
+            }
+            if carried_by.map(|carried| carried.0) != Some(action.actor) {
+                return Err(ActionFailure::MissingItem);
+            }
+            match target {
+                ActionTarget::SelfTarget => Ok(()),
+                ActionTarget::Entity(entity) if *entity == action.actor => Ok(()),
+                _ => Err(ActionFailure::InvalidTarget),
+            }
+        }
+        ActionKind::Descend | ActionKind::Ascend => Err(ActionFailure::Unsupported),
     }
 }
 

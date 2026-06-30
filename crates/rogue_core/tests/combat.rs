@@ -5,7 +5,7 @@ use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::action::resolver::{ActionFailure, ActionOutcome, ActionOutcomeLog};
 use rogue_core::actor::components::*;
-use rogue_core::item::components::Item;
+use rogue_core::item::components::{CarriedBy, Inventory, Item};
 use rogue_core::item::effects::EffectQueue;
 use rogue_core::simulation::{
     SimulationPlugin, SimulationStatus, SimulationStep, drive_simulation,
@@ -41,6 +41,8 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
                 current: 10,
                 maximum: 10,
             },
+            Inventory::new(4),
+            ActiveStatuses::default(),
             CombatStats {
                 power: 3,
                 defense: 1,
@@ -66,9 +68,10 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
             BlocksSight,
             HostileToPlayer,
             Health {
-                current: 4,
-                maximum: 4,
+                current: 10,
+                maximum: 10,
             },
+            ActiveStatuses::default(),
             CombatStats {
                 power: 1,
                 defense: 0,
@@ -302,6 +305,7 @@ fn moving_into_a_friendly_blocker_is_rejected() {
                 current: 6,
                 maximum: 6,
             },
+            ActiveStatuses::default(),
             BlocksMovement,
             GridPosition {
                 level: LevelId(0),
@@ -353,6 +357,7 @@ fn non_hostile_actor_does_not_bump_the_player() {
                 current: 5,
                 maximum: 5,
             },
+            ActiveStatuses::default(),
             CombatStats {
                 power: 2,
                 defense: 0,
@@ -422,6 +427,7 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
                 current: 9,
                 maximum: 9,
             },
+            ActiveStatuses::default(),
             CombatStats {
                 power: 1,
                 defense: 0,
@@ -480,7 +486,7 @@ fn unsupported_actions_report_an_explicit_failure() {
         .schedule_at(player, 0);
     app.world_mut().resource_mut::<ActionQueue>().push(Action {
         actor: player,
-        kind: ActionKind::PickUp { item: player },
+        kind: ActionKind::Descend,
     });
 
     app.world_mut().run_schedule(SimulationStep);
@@ -499,6 +505,173 @@ fn unsupported_actions_report_an_explicit_failure() {
 }
 
 #[test]
+fn distant_pickup_does_not_mutate_inventory_or_item_state() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    let item = app
+        .world_mut()
+        .spawn((
+            Item,
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(5, 5),
+            },
+        ))
+        .id();
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::PickUp { item },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let inventory = app.world().entity(player).get::<Inventory>().unwrap();
+    assert!(inventory.items.is_empty());
+    assert!(app.world().entity(item).get::<CarriedBy>().is_none());
+    assert_eq!(
+        app.world().entity(item).get::<GridPosition>().unwrap().cell,
+        IVec2::new(5, 5)
+    );
+    assert!(matches!(
+        app.world().resource::<ActionOutcomeLog>().latest(),
+        Some(ActionOutcome::Failed {
+            failure: ActionFailure::InvalidTarget,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn pickup_of_an_item_carried_by_someone_else_does_not_mutate_state() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    let owner = app
+        .world_mut()
+        .spawn((
+            Actor,
+            Monster,
+            BlocksMovement,
+            BlocksSight,
+            ActiveStatuses::default(),
+            Inventory::new(4),
+            Health {
+                current: 7,
+                maximum: 7,
+            },
+            CombatStats {
+                power: 2,
+                defense: 0,
+            },
+            PrototypeId("owner".to_string()),
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(4, 4),
+            },
+        ))
+        .id();
+    let item = app
+        .world_mut()
+        .spawn((
+            Item,
+            PrototypeId("trinket".to_string()),
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(4, 4),
+            },
+            CarriedBy(owner),
+        ))
+        .id();
+
+    {
+        let mut owner_inventory = app.world_mut().entity_mut(owner);
+        owner_inventory
+            .get_mut::<Inventory>()
+            .unwrap()
+            .items
+            .push(item);
+    }
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::PickUp { item },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let owner_inventory = app.world().entity(owner).get::<Inventory>().unwrap();
+    let player_inventory = app.world().entity(player).get::<Inventory>().unwrap();
+    assert_eq!(owner_inventory.items, vec![item]);
+    assert!(player_inventory.items.is_empty());
+    assert_eq!(
+        app.world().entity(item).get::<CarriedBy>().unwrap().0,
+        owner
+    );
+    assert!(matches!(
+        app.world().resource::<ActionOutcomeLog>().latest(),
+        Some(ActionOutcome::Failed {
+            failure: ActionFailure::MissingItem,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn invalid_target_item_use_does_not_consume_or_despawn_the_item() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    let item = app
+        .world_mut()
+        .spawn((
+            Item,
+            PrototypeId("healing_potion".to_string()),
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(2, 2),
+            },
+            CarriedBy(player),
+        ))
+        .id();
+    {
+        let mut inventory = app.world_mut().entity_mut(player);
+        inventory.get_mut::<Inventory>().unwrap().items.push(item);
+    }
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::UseItem {
+            item,
+            target: rogue_core::action::intent::ActionTarget::Cell {
+                level: LevelId(0),
+                position: IVec2::new(5, 5),
+            },
+        },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let inventory = app.world().entity(player).get::<Inventory>().unwrap();
+    assert_eq!(inventory.items, vec![item]);
+    assert!(app.world().get_entity(item).is_ok());
+    assert!(matches!(
+        app.world().resource::<ActionOutcomeLog>().latest(),
+        Some(ActionOutcome::Failed {
+            failure: ActionFailure::InvalidTarget,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);
@@ -511,7 +684,7 @@ fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
         .schedule_at(monster, 0);
     app.world_mut().resource_mut::<ActionQueue>().push(Action {
         actor: player,
-        kind: ActionKind::PickUp { item: player },
+        kind: ActionKind::Descend,
     });
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
 
