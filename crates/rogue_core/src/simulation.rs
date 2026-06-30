@@ -5,13 +5,14 @@ use bevy_ecs::schedule::ScheduleLabel;
 use crate::action::queue::ActionQueue;
 use crate::action::resolver::{ActionDecision, ActionOutcomeLog, resolve_action, validate_action};
 use crate::actor::ai::generate_ai_action;
-use crate::actor::components::PersistentIdAllocator;
+use crate::actor::components::{PersistentIdAllocator, StableEntityIndex};
 use crate::item::effects::{EffectQueue, apply_pending_effects};
 use crate::persistence::rng::RandomStreams;
 use crate::time::clock::{CurrentActor, TurnClock};
 use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
 use crate::world::spatial::{SpatialIndex, update_spatial_index};
+use sim_core::SimulationWorkBudget;
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimulationStep;
@@ -52,8 +53,10 @@ impl Plugin for SimulationPlugin {
             .init_resource::<TurnClock>()
             .init_resource::<CurrentActor>()
             .init_resource::<SpatialIndex>()
+            .init_resource::<StableEntityIndex>()
             .init_resource::<RandomStreams>()
             .init_resource::<PersistentIdAllocator>()
+            .init_resource::<SimulationWorkBudget>()
             .init_resource::<SimulationStatus>()
             .configure_sets(
                 SimulationStep,
@@ -88,9 +91,12 @@ impl Plugin for SimulationPlugin {
 }
 
 pub fn drive_simulation(world: &mut World) {
-    const MAX_STEPS_PER_FRAME: usize = 1_024;
+    let max_steps = world
+        .get_resource::<SimulationWorkBudget>()
+        .map(|budget| budget.maximum_steps_per_frame)
+        .unwrap_or(1_024);
 
-    for _ in 0..MAX_STEPS_PER_FRAME {
+    for _ in 0..max_steps {
         let status = *world.resource::<SimulationStatus>();
 
         if status != SimulationStatus::Resolving {

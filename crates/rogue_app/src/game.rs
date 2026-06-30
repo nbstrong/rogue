@@ -2,11 +2,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::prelude::*;
 use bevy_math::IVec2;
+use rogue_core::ItemId;
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::{
     ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
+    StableActorId, StableEntityIndex, StableItemId, Vision,
 };
 use rogue_core::content::definitions::ActorDefinition;
 use rogue_core::content::registry::ContentRegistry;
@@ -140,8 +142,10 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.remove_resource::<ActionDecision>();
     world.remove_resource::<ActionOutcomeLog>();
     world.remove_resource::<CurrentActor>();
+    world.remove_resource::<StableEntityIndex>();
     world.insert_resource(RandomStreams::seeded(0));
     world.insert_resource(PersistentIdAllocator::default());
+    world.insert_resource(StableEntityIndex::default());
 
     let player_def = world
         .resource::<ContentRegistry>()
@@ -282,60 +286,80 @@ fn spawn_actor(
     hostile: bool,
 ) -> Entity {
     let persistent_id = next_persistent_id(world);
-    let mut entity = world.spawn((
-        Actor,
-        BlocksMovement,
-        BlocksSight,
-        Health {
-            current: definition.maximum_health,
-            maximum: definition.maximum_health,
-        },
-        ActiveStatuses::default(),
-        CombatStats {
-            power: definition.power,
-            defense: definition.defense,
-        },
-        Vision {
-            range: definition.vision_range,
-        },
-        ActionSpeed {
-            ticks_per_action: definition.action_speed,
-        },
-        PrototypeId(definition.id.clone()),
-        GridPosition { level, cell },
-        PersistentId(persistent_id),
-        SessionEntity,
-    ));
+    let stable_actor_id = rogue_core::ActorId::new(persistent_id).expect("valid actor id");
+    let entity_id = {
+        let mut entity = world.spawn((
+            Actor,
+            BlocksMovement,
+            BlocksSight,
+            Health {
+                current: definition.maximum_health,
+                maximum: definition.maximum_health,
+            },
+            ActiveStatuses::default(),
+            CombatStats {
+                power: definition.power,
+                defense: definition.defense,
+            },
+            Vision {
+                range: definition.vision_range,
+            },
+            ActionSpeed {
+                ticks_per_action: definition.action_speed,
+            },
+            PrototypeId(definition.id.clone()),
+            GridPosition { level, cell },
+            PersistentId(persistent_id),
+            StableActorId(stable_actor_id),
+            SessionEntity,
+        ));
 
-    if is_player {
-        entity.insert(Player);
-        entity.insert(Inventory::new(8));
-    }
-    if hostile {
-        entity.insert((Monster, HostileToPlayer));
+        if is_player {
+            entity.insert(Player);
+            entity.insert(Inventory::new(8));
+        }
+        if hostile {
+            entity.insert((Monster, HostileToPlayer));
+        }
+
+        entity.id()
+    };
+
+    if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
+        index.actors.insert(stable_actor_id, entity_id);
     }
 
-    entity.id()
+    entity_id
 }
 
 fn spawn_loot_item(world: &mut World, level: LevelId, cell: IVec2, prototype: &str) -> Entity {
     let persistent_id = next_persistent_id(world);
-    world
-        .spawn((
-            Item,
-            PrototypeId(prototype.to_string()),
-            GridPosition { level, cell },
-            PersistentId(persistent_id),
-            SessionEntity,
-        ))
-        .id()
+    let stable_item_id = ItemId::new(persistent_id).expect("valid item id");
+    let entity = world.spawn((
+        Item,
+        PrototypeId(prototype.to_string()),
+        GridPosition { level, cell },
+        PersistentId(persistent_id),
+        StableItemId(stable_item_id),
+        SessionEntity,
+    ));
+    let entity_id = entity.id();
+
+    if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
+        index.items.insert(stable_item_id, entity_id);
+    }
+
+    entity_id
 }
 
 fn next_persistent_id(world: &mut World) -> u64 {
     let mut allocator = world
         .get_resource_mut::<PersistentIdAllocator>()
         .expect("persistent id allocator");
-    allocator.allocate().0
+    allocator
+        .allocate()
+        .expect("persistent id allocator exhausted")
+        .0
 }
 
 fn insert_occupant(

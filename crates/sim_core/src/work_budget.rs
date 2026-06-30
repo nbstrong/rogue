@@ -9,7 +9,7 @@ pub struct SimulationWorkBudget {
 impl Default for SimulationWorkBudget {
     fn default() -> Self {
         Self {
-            maximum_steps_per_frame: 1,
+            maximum_steps_per_frame: 1_024,
             maximum_domain_events_per_frame: 1_024,
         }
     }

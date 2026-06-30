@@ -3,16 +3,17 @@ use sim_core::persistence::version::validate_supported_version;
 use sim_core::rng::{PresentationRng, RandomStreams};
 use sim_core::schedule::{ScheduledWork, TurnClock, stable_sort_by_key};
 use sim_core::time::{SimClock, SimSpeed};
-use sim_core::work_budget::{SimulationWorkBudget, WorkBudgetProgress};
+use sim_core::work_budget::SimulationWorkBudget;
+use sim_core::{Cadence, DeterministicDriver, DueWork};
 
 #[test]
 fn typed_ids_allocate_independently() {
     let mut actors = IdAllocator::<ActorTag>::default();
     let mut items = IdAllocator::<ItemTag>::default();
 
-    let actor_a = actors.allocate();
-    let actor_b = actors.allocate();
-    let item_a = items.allocate();
+    let actor_a = actors.allocate().expect("actor id");
+    let actor_b = actors.allocate().expect("actor id");
+    let item_a = items.allocate().expect("item id");
 
     assert_eq!(actor_a.raw(), 1);
     assert_eq!(actor_b.raw(), 2);
@@ -55,29 +56,43 @@ fn sim_clock_advances_and_respects_pause() {
 
 #[test]
 fn work_budget_continues_without_reordering() {
-    let budget = SimulationWorkBudget {
-        maximum_steps_per_frame: 1,
-        maximum_domain_events_per_frame: 2,
+    let mut driver = DeterministicDriver::<u64> {
+        budget: SimulationWorkBudget {
+            maximum_steps_per_frame: 1,
+            maximum_domain_events_per_frame: 2,
+        },
+        ..Default::default()
     };
-    let mut progress = WorkBudgetProgress::default();
-    let mut processed = Vec::new();
-    let mut backlog = vec![1, 2, 3, 4];
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 1,
+        id: 4,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 0,
+        sequence: 2,
+        id: 2,
+    });
 
-    while !backlog.is_empty() {
-        progress.consume_step();
-        while let Some(next) = backlog.first().copied() {
-            processed.push(next);
-            backlog.remove(0);
-            progress.consume_domain_events(1);
-            if budget.exhausted(&progress) {
-                progress.steps_consumed = 0;
-                progress.domain_events_consumed = 0;
-                break;
-            }
-        }
+    let mut processed = Vec::new();
+    while !driver.backlog.is_empty() {
+        driver.begin_frame();
+        driver.run_frame(|work| {
+            processed.push(work.id);
+            1
+        });
     }
 
-    assert_eq!(processed, vec![1, 2, 3, 4]);
+    assert_eq!(processed, vec![1, 4, 2]);
 }
 
 #[test]
@@ -131,4 +146,18 @@ fn version_validation_rejects_zero_and_future_versions() {
     assert!(validate_supported_version(0).is_err());
     assert!(validate_supported_version(u32::MAX).is_err());
     assert!(validate_supported_version(sim_core::CURRENT_SCHEMA_VERSION).is_ok());
+}
+
+#[test]
+fn allocator_exhaustion_is_explicit() {
+    let mut allocator = IdAllocator::<ActorTag>::default();
+    allocator.set_next_available(u64::MAX - 1);
+    let _ = allocator.allocate().expect("final available id");
+    assert!(allocator.allocate().is_err());
+}
+
+#[test]
+fn zero_ids_are_rejected_during_deserialization() {
+    let result = ron::from_str::<sim_core::SimId<ActorTag>>("0");
+    assert!(result.is_err());
 }

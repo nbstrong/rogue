@@ -1,5 +1,6 @@
 use core::fmt;
 use core::marker::PhantomData;
+use core::num::NonZeroU64;
 
 use bevy_ecs::prelude::Resource;
 use serde::{Deserialize, Serialize};
@@ -12,10 +13,13 @@ pub struct SimId<Tag> {
 
 impl<Tag> SimId<Tag> {
     pub fn new(raw: u64) -> Option<Self> {
-        (raw != 0).then_some(Self::from_raw_unchecked(raw))
+        NonZeroU64::new(raw).map(|value| Self {
+            raw: value.get(),
+            marker: PhantomData,
+        })
     }
 
-    pub const fn from_raw_unchecked(raw: u64) -> Self {
+    pub(crate) const fn from_raw_unchecked(raw: u64) -> Self {
         Self {
             raw,
             marker: PhantomData,
@@ -48,7 +52,7 @@ impl<'de, Tag> Deserialize<'de> for SimId<Tag> {
         D: serde::Deserializer<'de>,
     {
         let raw = u64::deserialize(deserializer)?;
-        Ok(Self::from_raw_unchecked(raw))
+        Self::new(raw).ok_or_else(|| serde::de::Error::custom("zero is not a valid stable id"))
     }
 }
 
@@ -89,10 +93,14 @@ impl<Tag> Default for IdAllocator<Tag> {
 }
 
 impl<Tag> IdAllocator<Tag> {
-    pub fn allocate(&mut self) -> SimId<Tag> {
+    pub fn allocate(&mut self) -> Result<SimId<Tag>, AllocationError> {
         let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        SimId::from_raw_unchecked(id)
+        let next = self
+            .next_id
+            .checked_add(1)
+            .ok_or(AllocationError::Exhausted)?;
+        self.next_id = next;
+        Ok(SimId::from_raw_unchecked(id))
     }
 
     pub fn next_available(&self) -> u64 {
@@ -102,4 +110,9 @@ impl<Tag> IdAllocator<Tag> {
     pub fn set_next_available(&mut self, next_id: u64) {
         self.next_id = next_id.max(1);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationError {
+    Exhausted,
 }

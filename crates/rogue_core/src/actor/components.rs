@@ -1,5 +1,6 @@
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
+use std::collections::HashMap;
 
 use crate::actor::combat::StatusEffect;
 use crate::world::map::{GridPosition, LevelId};
@@ -62,6 +63,18 @@ pub struct LastKnownPlayerPosition {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PersistentId(pub u64);
 
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StableActorId(pub ActorId);
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StableItemId(pub ItemId);
+
+#[derive(Resource, Default, Debug, Clone)]
+pub struct StableEntityIndex {
+    pub actors: HashMap<ActorId, Entity>,
+    pub items: HashMap<ItemId, Entity>,
+}
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PersistentIdAllocator {
     next_id: u64,
@@ -74,10 +87,13 @@ impl Default for PersistentIdAllocator {
 }
 
 impl PersistentIdAllocator {
-    pub fn allocate(&mut self) -> PersistentId {
+    pub fn allocate(&mut self) -> Result<PersistentId, PersistentIdAllocationError> {
         let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        PersistentId(id)
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(PersistentIdAllocationError::Exhausted)?;
+        Ok(PersistentId(id))
     }
 
     pub fn next_available(&self) -> u64 {
@@ -87,6 +103,11 @@ impl PersistentIdAllocator {
     pub fn set_next_available(&mut self, next_id: u64) {
         self.next_id = next_id.max(1);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistentIdAllocationError {
+    Exhausted,
 }
 
 #[derive(Component, Debug, Clone, Default)]

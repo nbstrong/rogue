@@ -10,7 +10,8 @@ use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::combat::StatusEffect;
 use rogue_core::actor::components::{
     ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
+    StableActorId, StableItemId, Vision,
 };
 use rogue_core::actor::spawn::spawn_vertical_slice;
 use rogue_core::item::components::{Inventory, Item};
@@ -109,7 +110,10 @@ fn command_to_action_kind(
 }
 
 fn allocate_persistent_id(world: &mut World) -> PersistentId {
-    world.resource_mut::<PersistentIdAllocator>().allocate()
+    world
+        .resource_mut::<PersistentIdAllocator>()
+        .allocate()
+        .expect("persistent id allocator exhausted")
 }
 
 fn build_spatial_index(world: &mut World) {
@@ -174,6 +178,8 @@ fn initialize_world(app: &mut App, seed: u64) {
     };
 
     let player = {
+        let stable_actor_id =
+            rogue_core::ActorId::new(player_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
             Actor,
             Player,
@@ -199,11 +205,14 @@ fn initialize_world(app: &mut App, seed: u64) {
                 cell: IVec2::new(2, 2),
             },
             player_persistent_id,
+            StableActorId(stable_actor_id),
         ));
         entity.id()
     };
 
     let monster = {
+        let stable_actor_id =
+            rogue_core::ActorId::new(monster_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
             Actor,
             Monster,
@@ -229,11 +238,13 @@ fn initialize_world(app: &mut App, seed: u64) {
                 cell: IVec2::new(5, 2),
             },
             monster_persistent_id,
+            StableActorId(stable_actor_id),
         ));
         entity.id()
     };
 
     let _loot = {
+        let stable_item_id = rogue_core::ItemId::new(loot_persistent_id.0).expect("valid item id");
         let entity = app.world_mut().spawn((
             Item,
             PrototypeId(loot_proto.to_string()),
@@ -242,6 +253,7 @@ fn initialize_world(app: &mut App, seed: u64) {
                 cell: IVec2::new(2, 2),
             },
             loot_persistent_id,
+            StableItemId(stable_item_id),
         ));
         entity.id()
     };
@@ -766,7 +778,9 @@ fn spawn_vertical_slice_advances_the_authoritative_allocator() {
     let _ = app.world_mut().run_system_once(
         |mut commands: Commands<'_, '_>, mut allocator: ResMut<'_, PersistentIdAllocator>| {
             spawn_vertical_slice(&mut commands, &mut allocator);
-            let bonus_id = allocator.allocate();
+            let bonus_id = allocator
+                .allocate()
+                .expect("persistent id allocator exhausted");
             commands.spawn((
                 Item,
                 PrototypeId("bonus".to_string()),
@@ -775,6 +789,7 @@ fn spawn_vertical_slice_advances_the_authoritative_allocator() {
                     cell: IVec2::new(1, 1),
                 },
                 bonus_id,
+                StableItemId(rogue_core::ItemId::new(bonus_id.0).expect("valid item id")),
             ));
         },
     );
@@ -814,7 +829,9 @@ fn nonzero_level_ids_survive_restore_and_resave() {
 
     let player_id = {
         let mut allocator = app.world_mut().resource_mut::<PersistentIdAllocator>();
-        allocator.allocate()
+        allocator
+            .allocate()
+            .expect("persistent id allocator exhausted")
     };
     app.world_mut().spawn((
         Actor,
@@ -841,6 +858,7 @@ fn nonzero_level_ids_survive_restore_and_resave() {
             cell: IVec2::new(2, 2),
         },
         player_id,
+        StableActorId(rogue_core::ActorId::new(player_id.0).expect("valid actor id")),
     ));
 
     build_spatial_index(app.world_mut());
@@ -899,7 +917,9 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
 
     let player_id = {
         let mut allocator = app.world_mut().resource_mut::<PersistentIdAllocator>();
-        allocator.allocate()
+        allocator
+            .allocate()
+            .expect("persistent id allocator exhausted")
     };
     let player = app
         .world_mut()
@@ -926,6 +946,7 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
                 cell: IVec2::new(2, 2),
             },
             player_id,
+            StableActorId(rogue_core::ActorId::new(player_id.0).expect("valid actor id")),
         ))
         .id();
 

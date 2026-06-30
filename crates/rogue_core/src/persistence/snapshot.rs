@@ -9,7 +9,8 @@ use crate::action::queue::ActionQueue;
 use crate::actor::combat::{DamageKind, StatusEffect};
 use crate::actor::components::{
     ActionSpeed, ActiveStatuses, Actor, AiGoal, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
+    StableActorId, StableEntityIndex, StableItemId, Vision,
 };
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
@@ -1076,6 +1077,19 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
             ));
         }
 
+        if entity.contains::<Actor>() && entity.get::<StableActorId>().is_none() {
+            return Err(format!(
+                "durable actor {:?} is missing a stable actor id",
+                entity.id()
+            ));
+        }
+        if entity.contains::<Item>() && entity.get::<StableItemId>().is_none() {
+            return Err(format!(
+                "durable item {:?} is missing a stable item id",
+                entity.id()
+            ));
+        }
+
         if let Some(id) = persistent_id {
             if id.0 == 0 {
                 return Err(format!(
@@ -1203,6 +1217,7 @@ fn clear_simulation_state(world: &mut World) {
     world.remove_resource::<EffectQueue>();
     world.remove_resource::<TurnClock>();
     world.remove_resource::<CurrentActor>();
+    world.remove_resource::<StableEntityIndex>();
     world.remove_resource::<SimulationStatus>();
     world.remove_resource::<RandomStreams>();
     world.remove_resource::<PersistentIdAllocator>();
@@ -1280,6 +1295,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         timeline: std::collections::BinaryHeap::new(),
     });
     world.insert_resource(CurrentActor::default());
+    world.insert_resource(StableEntityIndex::default());
     world.insert_resource(SimulationStatus::from(snapshot.simulation_status.clone()));
 
     let mut entity_map = HashMap::new();
@@ -1334,6 +1350,16 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             });
         }
         if entity.actor {
+            let actor_id = sim_core::ActorId::new(entity.id)
+                .ok_or_else(|| format!("invalid actor id {}", entity.id))?;
+            spawned.insert(StableActorId(actor_id));
+        }
+        if entity.item {
+            let item_id = sim_core::ItemId::new(entity.id)
+                .ok_or_else(|| format!("invalid item id {}", entity.id))?;
+            spawned.insert(StableItemId(item_id));
+        }
+        if entity.actor {
             spawned.insert(ActiveStatuses::default());
         }
         let entity_id = spawned.id();
@@ -1382,6 +1408,26 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         }
         if !entity.active_statuses.is_empty() {
             entity_mut.insert(ActiveStatuses(entity.active_statuses.clone()));
+        }
+    }
+
+    if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
+        index.actors.clear();
+        index.items.clear();
+        for entity in &snapshot.entities {
+            let entity_id = *entity_map
+                .get(&entity.id)
+                .ok_or_else(|| format!("missing restored entity {}", entity.id))?;
+            if entity.actor {
+                let actor_id = sim_core::ActorId::new(entity.id)
+                    .ok_or_else(|| format!("invalid actor id {}", entity.id))?;
+                index.actors.insert(actor_id, entity_id);
+            }
+            if entity.item {
+                let item_id = sim_core::ItemId::new(entity.id)
+                    .ok_or_else(|| format!("invalid item id {}", entity.id))?;
+                index.items.insert(item_id, entity_id);
+            }
         }
     }
 

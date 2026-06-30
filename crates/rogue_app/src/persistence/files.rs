@@ -203,7 +203,7 @@ mod tests {
     use rogue_core::action::resolver::ActionDecision;
     use rogue_core::actor::components::{
         ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, PersistentId,
-        PersistentIdAllocator, Player, PrototypeId, Vision,
+        PersistentIdAllocator, Player, PrototypeId, StableActorId, Vision,
     };
     use rogue_core::item::effects::EffectQueue;
     use rogue_core::persistence::rng::RandomStreams;
@@ -251,6 +251,7 @@ mod tests {
                     cell: IVec2::new(2, 2),
                 },
                 PersistentId(1),
+                StableActorId(rogue_core::ActorId::new(1).expect("valid actor id")),
             ))
             .id();
         let _ = player;

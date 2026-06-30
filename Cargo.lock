@@ -4207,6 +4207,7 @@ name = "sim_core"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "ron 0.8.1",
  "serde",
 ]
 
