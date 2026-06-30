@@ -1,8 +1,10 @@
 # Agent Instructions
 
 ## Repository Access
+https://github.com/nbstrong/rogue
 
-* Always use the GitHub connector when interacting with the repository.
+* Always use the GitHub connector app when interacting with the repository.
+* Do not use gh (Github CLI) or any other command-line tool to interact with the repository.
 * Only perform read actions on the repository unless the user explicitly requests a repository write.
 * Do not perform source-control operations. The user handles branches, commits, rebases, merges, and pushes.
 

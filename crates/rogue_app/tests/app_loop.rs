@@ -8,10 +8,12 @@ use rogue_app::game::{HudText, LogText};
 use rogue_app::input::InputPlugin;
 use rogue_app::presentation::PresentationPlugin;
 use rogue_app::ui::GameUiPlugin;
+use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::Health;
 use rogue_core::actor::components::Monster;
 use rogue_core::actor::components::Player;
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
+use rogue_core::time::clock::CurrentActor;
 use rogue_core::world::map::GridPosition;
 use rogue_core::world::map::LevelMap;
 
@@ -265,6 +267,17 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
+    assert!(
+        app.world()
+            .resource::<ActionOutcomeLog>()
+            .outcomes
+            .is_empty()
+    );
+    assert!(matches!(
+        *app.world().resource::<ActionDecision>(),
+        ActionDecision::Idle
+    ));
+    assert!(app.world().resource::<CurrentActor>().0.is_none());
 
     let hud_text = {
         let world = app.world_mut();
