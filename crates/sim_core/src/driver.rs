@@ -3,7 +3,7 @@ use std::collections::BinaryHeap;
 
 use crate::time::{SimClock, SimSpeed};
 use crate::work_budget::{SimulationWorkBudget, WorkBudgetProgress};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Cadence {
@@ -58,11 +58,7 @@ impl<Id: Ord> PartialOrd for DueWork<Id> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "Id: Serialize",
-    deserialize = "Id: Deserialize<'de> + Ord"
-))]
+#[derive(Debug, Clone)]
 pub struct WorkBacklog<Id> {
     queue: BinaryHeap<Reverse<DueWork<Id>>>,
 }
@@ -93,10 +89,39 @@ impl<Id: Ord + Copy> WorkBacklog<Id> {
     }
 }
 
+impl<Id: Serialize + Ord + Copy> Serialize for WorkBacklog<Id> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut entries: Vec<_> = self.queue.iter().map(|entry| entry.0).collect();
+        entries.sort();
+        entries.serialize(serializer)
+    }
+}
+
+impl<'de, Id> Deserialize<'de> for WorkBacklog<Id>
+where
+    Id: Deserialize<'de> + Ord + Copy,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut entries = Vec::<DueWork<Id>>::deserialize(deserializer)?;
+        entries.sort();
+        let mut backlog = Self::default();
+        for entry in entries {
+            backlog.enqueue(entry);
+        }
+        Ok(backlog)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "Id: Serialize",
-    deserialize = "Id: Deserialize<'de> + Ord"
+    serialize = "Id: Serialize + Ord + Copy",
+    deserialize = "Id: Deserialize<'de> + Ord + Copy"
 ))]
 pub struct DeterministicDriver<Id> {
     pub clock: SimClock,
@@ -136,7 +161,7 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             .saturating_add(self.clock.speed.advance_minutes())
     }
 
-    pub fn run_frame<F>(&mut self, mut apply: F)
+    pub fn run_frame<F>(&mut self, mut apply: F) -> Result<(), DriverError<Id>>
     where
         F: FnMut(&SimClock, DueWork<Id>) -> usize,
     {
@@ -153,7 +178,11 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             }
 
             if next.domain_event_cost > self.budget.remaining_domain_events(&self.progress) {
-                break;
+                return Err(DriverError::WorkExceedsRemainingBudget {
+                    id: next.id,
+                    remaining_domain_events: self.budget.remaining_domain_events(&self.progress),
+                    declared_cost: next.domain_event_cost,
+                });
             }
 
             let work = self.backlog.pop().expect("backlog peek/pop mismatch");
@@ -164,12 +193,15 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             self.clock.minute = processed_minute;
             let produced = apply(&self.clock, work);
             self.progress.consume_step();
+            if produced > work.domain_event_cost {
+                return Err(DriverError::WorkProducedMoreEventsThanDeclared {
+                    id: work.id,
+                    declared_cost: work.domain_event_cost,
+                    produced,
+                });
+            }
             self.progress
                 .consume_domain_events(work.domain_event_cost.max(1));
-            debug_assert!(
-                produced <= work.domain_event_cost,
-                "work item exceeded its declared domain event cost"
-            );
         }
 
         let exhausted = self.budget.exhausted(&self.progress);
@@ -188,7 +220,23 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             self.clock.minute = processed_minute;
             self.pending_target_minute = Some(target);
         }
+
+        Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriverError<Id> {
+    WorkExceedsRemainingBudget {
+        id: Id,
+        remaining_domain_events: usize,
+        declared_cost: usize,
+    },
+    WorkProducedMoreEventsThanDeclared {
+        id: Id,
+        declared_cost: usize,
+        produced: usize,
+    },
 }
 
 impl SimSpeed {

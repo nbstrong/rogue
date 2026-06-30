@@ -87,10 +87,12 @@ fn work_budget_continues_without_reordering() {
     let mut processed = Vec::new();
     while !driver.backlog.is_empty() {
         driver.begin_frame();
-        driver.run_frame(|_, work| {
-            processed.push(work.id);
-            work.domain_event_cost
-        });
+        driver
+            .run_frame(|_, work| {
+                processed.push(work.id);
+                work.domain_event_cost
+            })
+            .expect("driver frame");
     }
 
     assert_eq!(processed, vec![1, 2, 4]);
@@ -128,10 +130,12 @@ fn work_budget_orders_same_minute_by_cadence_then_sequence() {
 
     let mut processed = Vec::new();
     driver.begin_frame();
-    driver.run_frame(|_, work| {
-        processed.push(work.id);
-        work.domain_event_cost
-    });
+    driver
+        .run_frame(|_, work| {
+            processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("driver frame");
 
     assert_eq!(processed, vec![1, 2, 3]);
 }
@@ -200,10 +204,12 @@ fn driver_exposes_the_due_clock_to_callbacks() {
 
     let mut observed_minutes = Vec::new();
     driver.begin_frame();
-    driver.run_frame(|clock, work| {
-        observed_minutes.push((clock.minute, work.due_minute));
-        work.domain_event_cost
-    });
+    driver
+        .run_frame(|clock, work| {
+            observed_minutes.push((clock.minute, work.due_minute));
+            work.domain_event_cost
+        })
+        .expect("driver frame");
 
     assert_eq!(observed_minutes, vec![(7, 7)]);
 }
@@ -232,7 +238,9 @@ fn driver_roundtrip_preserves_backlog_and_progress() {
     });
 
     driver.begin_frame();
-    driver.run_frame(|_, work| work.domain_event_cost);
+    driver
+        .run_frame(|_, work| work.domain_event_cost)
+        .expect("driver frame");
 
     let encoded = ron::to_string(&driver).expect("driver snapshot");
     let mut restored: DeterministicDriver<u64> = ron::from_str(&encoded).expect("driver restore");
@@ -241,17 +249,21 @@ fn driver_roundtrip_preserves_backlog_and_progress() {
 
     let mut resumed_processed = Vec::new();
     restored.begin_frame();
-    restored.run_frame(|_, work| {
-        resumed_processed.push(work.id);
-        work.domain_event_cost
-    });
+    restored
+        .run_frame(|_, work| {
+            resumed_processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("driver frame");
 
     let mut expected_processed = Vec::new();
     uninterrupted.begin_frame();
-    uninterrupted.run_frame(|_, work| {
-        expected_processed.push(work.id);
-        work.domain_event_cost
-    });
+    uninterrupted
+        .run_frame(|_, work| {
+            expected_processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("driver frame");
 
     assert_eq!(resumed_processed, expected_processed);
     assert_eq!(restored.clock.minute, uninterrupted.clock.minute);
@@ -287,4 +299,107 @@ fn zero_ids_are_rejected_during_deserialization() {
 fn allocator_deserialization_rejects_zero_state() {
     let result = ron::from_str::<IdAllocator<ActorTag>>("IdAllocator(next_id: 0)");
     assert!(result.is_err());
+}
+
+#[test]
+fn work_items_larger_than_the_frame_budget_are_rejected() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 3,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 4,
+    });
+
+    driver.begin_frame();
+    let err = driver
+        .run_frame(|_, work| work.domain_event_cost)
+        .expect_err("oversized work should be rejected");
+
+    assert_eq!(
+        err,
+        sim_core::DriverError::WorkExceedsRemainingBudget {
+            id: 1,
+            remaining_domain_events: 3,
+            declared_cost: 4,
+        }
+    );
+    assert_eq!(driver.backlog.peek().map(|work| work.id), Some(1));
+}
+
+#[test]
+fn callbacks_cannot_exceed_the_declared_event_cost() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 8,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 2,
+    });
+
+    driver.begin_frame();
+    let err = driver
+        .run_frame(|_, _| 3)
+        .expect_err("violating the declared event cost should fail");
+
+    assert_eq!(
+        err,
+        sim_core::DriverError::WorkProducedMoreEventsThanDeclared {
+            id: 1,
+            declared_cost: 2,
+            produced: 3,
+        }
+    );
+}
+
+#[test]
+fn backlog_serializes_canonically_regardless_of_insertion_order() {
+    let mut first = DeterministicDriver::<u64>::default();
+    first.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 4,
+        sequence: 2,
+        id: 20,
+        domain_event_cost: 1,
+    });
+    first.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 1,
+        id: 10,
+        domain_event_cost: 1,
+    });
+
+    let mut second = DeterministicDriver::<u64>::default();
+    second.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 1,
+        id: 10,
+        domain_event_cost: 1,
+    });
+    second.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 4,
+        sequence: 2,
+        id: 20,
+        domain_event_cost: 1,
+    });
+
+    assert_eq!(
+        ron::to_string(&first).expect("serialize first"),
+        ron::to_string(&second).expect("serialize second")
+    );
 }

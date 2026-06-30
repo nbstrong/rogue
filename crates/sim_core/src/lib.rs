@@ -10,7 +10,7 @@ pub mod schedule;
 pub mod time;
 pub mod work_budget;
 
-pub use driver::{Cadence, DeterministicDriver, DueWork, WorkBacklog};
+pub use driver::{Cadence, DeterministicDriver, DriverError, DueWork, WorkBacklog};
 pub use identity::{
     ActorId, ActorTag, AllocationError, IdAllocator, ItemId, ItemTag, PersistentTag, SimId,
     StableIdTag,

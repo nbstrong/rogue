@@ -95,18 +95,27 @@ fn build_spatial_index(world: &mut World) {
         &GridPosition,
         Option<&BlocksMovement>,
         Option<&BlocksSight>,
+        Option<&PersistentId>,
         Option<&StableActorId>,
         Option<&StableItemId>,
     )>();
 
-    for (entity, position, blocks_movement, blocks_sight, stable_actor, stable_item) in
-        query.iter(world)
+    for (
+        entity,
+        position,
+        blocks_movement,
+        blocks_sight,
+        persistent_id,
+        stable_actor,
+        stable_item,
+    ) in query.iter(world)
     {
         spatial.insert_occupant(
             entity,
             *position,
             stable_actor,
             stable_item,
+            persistent_id,
             blocks_movement.is_some(),
             blocks_sight.is_some(),
         );
@@ -323,7 +332,6 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
         drive_command(&mut app, command);
     }
 
-    finalize_snapshot_boundary(&mut app);
     snapshot_world(app.world()).expect("snapshot should be valid")
 }
 
@@ -331,46 +339,6 @@ fn run_commands(app: &mut App, commands: &[ActionKindSnapshot]) {
     for command in commands {
         drive_command(app, command);
     }
-}
-
-fn finalize_snapshot_boundary(app: &mut App) {
-    *app.world_mut()
-        .resource_mut::<rogue_core::action::resolver::ActionDecision>() =
-        rogue_core::action::resolver::ActionDecision::Idle;
-    app.world_mut()
-        .resource_mut::<ActionQueue>()
-        .actions
-        .clear();
-    app.world_mut().resource_mut::<EffectQueue>().0.clear();
-    app.world_mut().resource_mut::<CurrentActor>().0 = None;
-    if !matches!(
-        *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::GameOver
-    ) {
-        *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::WaitingForPlayer;
-    }
-    app.world_mut()
-        .run_system_once(rogue_core::simulation::rebuild_stable_entity_index)
-        .expect("rebuild stable entity index");
-
-    let valid_timeline = {
-        let index = app
-            .world()
-            .resource::<rogue_core::actor::components::StableEntityIndex>();
-        let clock = app.world().resource::<TurnClock>();
-        clock
-            .timeline
-            .iter()
-            .filter_map(|entry| {
-                index
-                    .actor(entry.0.actor)
-                    .map(|_| std::cmp::Reverse(entry.0))
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let mut clock = app.world_mut().resource_mut::<TurnClock>();
-    clock.timeline = valid_timeline.into_iter().collect();
 }
 
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
@@ -477,8 +445,6 @@ fn continuation_after_restore_matches_the_original_world() {
     run_commands(&mut original_app, &fixture.commands[split..]);
     run_commands(&mut restored_app, &fixture.commands[split..]);
 
-    finalize_snapshot_boundary(&mut original_app);
-    finalize_snapshot_boundary(&mut restored_app);
     let original_final = snapshot_world(original_app.world()).expect("original final snapshot");
     let restored_final = snapshot_world(restored_app.world()).expect("restored final snapshot");
 
@@ -1191,6 +1157,7 @@ fn spatial_index_orders_occupants_by_stable_identity() {
         GridPosition { level, cell },
         first_stable.as_ref(),
         None,
+        None,
         true,
         false,
     );
@@ -1198,6 +1165,7 @@ fn spatial_index_orders_occupants_by_stable_identity() {
         second,
         GridPosition { level, cell },
         second_stable.as_ref(),
+        None,
         None,
         true,
         false,

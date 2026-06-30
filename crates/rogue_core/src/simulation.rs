@@ -11,11 +11,13 @@ use crate::actor::components::{
 use crate::item::components::Item;
 use crate::item::effects::{EffectQueue, apply_pending_effects};
 use crate::persistence::rng::RandomStreams;
+use crate::time::clock::ScheduledActor;
 use crate::time::clock::{CurrentActor, TurnClock};
 use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
 use crate::world::spatial::{SpatialIndex, update_spatial_index};
 use sim_core::SimulationWorkBudget;
+use std::cmp::Reverse;
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimulationStep;
@@ -84,6 +86,7 @@ impl Plugin for SimulationPlugin {
                     resolve_action.in_set(SimulationSet::Resolve),
                     apply_pending_effects.in_set(SimulationSet::ApplyEffects),
                     remove_dead_entities.in_set(SimulationSet::HandleDeath),
+                    prune_stale_timeline.in_set(SimulationSet::HandleDeath),
                     (
                         rebuild_stable_entity_index,
                         update_spatial_index,
@@ -136,6 +139,30 @@ pub fn remove_dead_entities(
     if !player_exists {
         *status = SimulationStatus::GameOver;
     }
+}
+
+pub fn prune_stale_timeline(
+    mut clock: ResMut<'_, TurnClock>,
+    stable_index: Res<'_, StableEntityIndex>,
+    actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId)>,
+) {
+    let mut retained = Vec::new();
+    while let Some(entry) = clock.pop_next() {
+        let Some(entity) = stable_index.actor(entry.actor) else {
+            continue;
+        };
+        if actors
+            .get(entity)
+            .is_ok_and(|(health, stable_id)| health.current > 0 && stable_id.0 == entry.actor)
+        {
+            retained.push(Reverse(ScheduledActor {
+                next_tick: entry.next_tick,
+                sequence: entry.sequence,
+                actor: entry.actor,
+            }));
+        }
+    }
+    clock.timeline = retained.into_iter().collect();
 }
 
 pub fn rebuild_stable_entity_index(

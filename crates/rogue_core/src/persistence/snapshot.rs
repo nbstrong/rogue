@@ -1180,8 +1180,12 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         pending_effects.push(effect_to_snapshot(effect)?);
     }
 
-    if !matches!(*decision, crate::action::resolver::ActionDecision::Idle) {
-        return Err("snapshot requires an idle action decision".to_string());
+    if !matches!(
+        *decision,
+        crate::action::resolver::ActionDecision::Idle
+            | crate::action::resolver::ActionDecision::WaitingForPlayer
+    ) {
+        return Err("snapshot requires an idle or waiting action decision".to_string());
     }
     if !action_queue.actions.is_empty()
         || !effect_queue.0.is_empty()
@@ -1258,17 +1262,26 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
         &GridPosition,
         Option<&BlocksMovement>,
         Option<&BlocksSight>,
+        Option<&PersistentId>,
         Option<&StableActorId>,
         Option<&StableItemId>,
     )>();
-    for (entity, position, blocks_movement, blocks_sight, stable_actor, stable_item) in
-        query.iter(world)
+    for (
+        entity,
+        position,
+        blocks_movement,
+        blocks_sight,
+        persistent_id,
+        stable_actor,
+        stable_item,
+    ) in query.iter(world)
     {
         spatial.insert_occupant(
             entity,
             *position,
             stable_actor,
             stable_item,
+            persistent_id,
             blocks_movement.is_some(),
             blocks_sight.is_some(),
         );

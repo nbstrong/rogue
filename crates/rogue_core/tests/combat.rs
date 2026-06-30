@@ -70,6 +70,7 @@ fn register_spatial_occupant(
     cell: IVec2,
     stable_actor: Option<StableActorId>,
     stable_item: Option<StableItemId>,
+    persistent_id: Option<PersistentId>,
     blocks_movement: bool,
     blocks_sight: bool,
 ) {
@@ -78,6 +79,7 @@ fn register_spatial_occupant(
         GridPosition { level, cell },
         stable_actor.as_ref(),
         stable_item.as_ref(),
+        persistent_id.as_ref(),
         blocks_movement,
         blocks_sight,
     );
@@ -160,6 +162,7 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         IVec2::new(2, 2),
         player_stable,
         None,
+        app.world().entity(player).get::<PersistentId>().copied(),
         true,
         true,
     );
@@ -170,6 +173,7 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         IVec2::new(3, 2),
         monster_stable,
         None,
+        app.world().entity(monster).get::<PersistentId>().copied(),
         true,
         true,
     );
@@ -338,6 +342,7 @@ fn moving_over_an_item_does_not_damage_it() {
 
     {
         let item_stable = app.world().entity(item).get::<StableItemId>().copied();
+        let item_persistent = app.world().entity(item).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
         register_spatial_occupant(
             &mut spatial,
@@ -346,6 +351,7 @@ fn moving_over_an_item_does_not_damage_it() {
             IVec2::new(2, 3),
             None,
             item_stable,
+            item_persistent,
             false,
             false,
         );
@@ -393,6 +399,7 @@ fn moving_into_a_friendly_blocker_is_rejected() {
 
     {
         let blocker_stable = app.world().entity(blocker).get::<StableActorId>().copied();
+        let blocker_persistent = app.world().entity(blocker).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
         register_spatial_occupant(
             &mut spatial,
@@ -401,6 +408,7 @@ fn moving_into_a_friendly_blocker_is_rejected() {
             IVec2::new(2, 3),
             blocker_stable,
             None,
+            blocker_persistent,
             true,
             false,
         );
@@ -458,6 +466,7 @@ fn non_hostile_actor_does_not_bump_the_player() {
 
     {
         let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
+        let neutral_persistent = app.world().entity(neutral).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
         register_spatial_occupant(
             &mut spatial,
@@ -466,6 +475,7 @@ fn non_hostile_actor_does_not_bump_the_player() {
             IVec2::new(1, 2),
             neutral_stable,
             None,
+            neutral_persistent,
             true,
             true,
         );
@@ -523,6 +533,7 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
 
     {
         let target_stable = app.world().entity(target).get::<StableActorId>().copied();
+        let target_persistent = app.world().entity(target).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
         register_spatial_occupant(
             &mut spatial,
@@ -531,6 +542,7 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
             IVec2::new(5, 5),
             target_stable,
             None,
+            target_persistent,
             true,
             true,
         );
@@ -840,6 +852,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
 
     {
         let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
+        let neutral_persistent = app.world().entity(neutral).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
         register_spatial_occupant(
             &mut spatial,
@@ -848,6 +861,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
             IVec2::new(1, 2),
             neutral_stable,
             None,
+            neutral_persistent,
             true,
             true,
         );
