@@ -1,5 +1,6 @@
 use bevy_ecs::prelude::*;
 
+use crate::action::queue::ActionQueue;
 use crate::actor::components::Player;
 use crate::simulation::SimulationStatus;
 use crate::time::clock::{CurrentActor, TurnClock};
@@ -30,6 +31,7 @@ pub fn select_next_actor(
 pub fn finish_simulation_step(
     mut current_actor: ResMut<'_, CurrentActor>,
     clock: Res<'_, TurnClock>,
+    queue: Res<'_, ActionQueue>,
     player: Query<'_, '_, Entity, With<Player>>,
     mut status: ResMut<'_, SimulationStatus>,
 ) {
@@ -43,6 +45,10 @@ pub fn finish_simulation_step(
     }
     if let Some(next) = clock.peek_next() {
         if player.get(next.actor).is_ok() {
+            if queue.contains_actor(next.actor) {
+                *status = SimulationStatus::Resolving;
+                return;
+            }
             *status = SimulationStatus::WaitingForPlayer;
             return;
         }

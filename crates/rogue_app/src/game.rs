@@ -3,6 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use bevy::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::action::queue::ActionQueue;
+use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::{
     ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
     PersistentId, Player, PrototypeId, Vision,
@@ -11,7 +12,7 @@ use rogue_core::content::definitions::ActorDefinition;
 use rogue_core::content::registry::ContentRegistry;
 use rogue_core::item::effects::EffectQueue;
 use rogue_core::simulation::SimulationStatus;
-use rogue_core::time::clock::TurnClock;
+use rogue_core::time::clock::{CurrentActor, TurnClock};
 use rogue_core::world::fov::recalculate_fov_for_player;
 use rogue_core::world::generation::generate_one_room;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
@@ -127,6 +128,9 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.remove_resource::<EffectQueue>();
     world.remove_resource::<TurnClock>();
     world.remove_resource::<SimulationStatus>();
+    world.remove_resource::<ActionDecision>();
+    world.remove_resource::<ActionOutcomeLog>();
+    world.remove_resource::<CurrentActor>();
 
     let player_def = world
         .resource::<ContentRegistry>()
@@ -163,6 +167,9 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.insert_resource(EffectQueue::default());
     world.insert_resource(clock);
     world.insert_resource(SimulationStatus::WaitingForPlayer);
+    world.insert_resource(ActionDecision::default());
+    world.insert_resource(ActionOutcomeLog::default());
+    world.insert_resource(CurrentActor::default());
     world.insert_resource(CurrentInputMode::default());
 
     if let Some(mut map) = world.get_resource_mut::<LevelMap>() {

@@ -156,6 +156,58 @@ fn waiting_player_turn_is_preserved_until_action_arrives() {
 }
 
 #[test]
+fn stale_scheduled_actor_is_skipped_before_the_next_valid_actor() {
+    let mut app = build_app();
+    let (player, monster) = spawn_test_world(&mut app);
+
+    app.world_mut().entity_mut(monster).insert(Health {
+        current: 0,
+        maximum: 4,
+    });
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(monster, 0);
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
+    assert_eq!(app.world().resource::<CurrentActor>().0, Some(player));
+}
+
+#[test]
+fn prequeued_player_action_keeps_the_simulation_resolving() {
+    let mut app = build_app();
+    let (player, monster) = spawn_test_world(&mut app);
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(monster, 0);
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 50);
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::Wait,
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::Resolving
+    );
+    assert!(app.world().resource::<ActionQueue>().contains_actor(player));
+    assert!(app.world().resource::<CurrentActor>().0.is_none());
+}
+
+#[test]
 fn actions_for_other_actors_are_preserved_through_their_turn() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);
