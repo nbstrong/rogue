@@ -6,12 +6,14 @@ use rogue_app::assets::AssetPlugin;
 use rogue_app::game::GamePlugin;
 use rogue_app::game::{HudText, LogText};
 use rogue_app::input::InputPlugin;
+use rogue_app::persistence::{load_world_from_path, save_world_to_path};
 use rogue_app::presentation::PresentationPlugin;
 use rogue_app::ui::GameUiPlugin;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::Health;
 use rogue_core::actor::components::Monster;
 use rogue_core::actor::components::Player;
+use rogue_core::persistence::snapshot::{snapshot_digest, snapshot_world};
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::time::clock::CurrentActor;
 use rogue_core::world::map::GridPosition;
@@ -291,4 +293,42 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     assert!(hud_text.contains("HP"));
     assert!(hud_text.contains("Pos"));
     assert!(hud_text.contains("WaitingForPlayer"));
+}
+
+#[test]
+fn save_and_load_round_trip_preserves_the_snapshot_digest() {
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "rogue-save-{}-{}.ron",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    let mut saved_app = build_app();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+
+    let original_snapshot = snapshot_world(saved_app.world()).expect("original snapshot");
+    let original_digest = snapshot_digest(&original_snapshot).expect("original digest");
+    save_world_to_path(saved_app.world(), &save_path).expect("save file");
+
+    let mut loaded_app = build_app();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    load_world_from_path(loaded_app.world_mut(), &save_path).expect("load file");
+
+    let loaded_snapshot = snapshot_world(loaded_app.world()).expect("loaded snapshot");
+    let loaded_digest = snapshot_digest(&loaded_snapshot).expect("loaded digest");
+
+    assert_eq!(original_snapshot, loaded_snapshot);
+    assert_eq!(original_digest, loaded_digest);
+
+    let _ = std::fs::remove_file(save_path);
 }

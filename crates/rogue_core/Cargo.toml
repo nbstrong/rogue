@@ -7,5 +7,6 @@ edition.workspace = true
 bevy_app = { workspace = true }
 bevy_ecs = { workspace = true }
 bevy_math = { workspace = true }
+blake3 = { workspace = true }
+ron = { workspace = true }
 serde = { workspace = true }
-

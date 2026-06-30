@@ -6,11 +6,12 @@ use rogue_core::action::queue::ActionQueue;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::{
     ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
-    PersistentId, Player, PrototypeId, Vision,
+    PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
 use rogue_core::content::definitions::ActorDefinition;
 use rogue_core::content::registry::ContentRegistry;
 use rogue_core::item::effects::EffectQueue;
+use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::simulation::SimulationStatus;
 use rogue_core::time::clock::{CurrentActor, TurnClock};
 use rogue_core::world::fov::recalculate_fov_for_player;
@@ -62,9 +63,6 @@ pub struct GameRootState {
     pub initialized: bool,
 }
 
-#[derive(Resource, Default)]
-pub struct PersistentIdCounter(pub u64);
-
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
@@ -74,8 +72,9 @@ impl Plugin for GamePlugin {
             .init_resource::<HealthSnapshot>()
             .init_resource::<CombatLog>()
             .init_resource::<GameRootState>()
-            .init_resource::<PersistentIdCounter>()
             .init_resource::<CurrentInputMode>()
+            .init_resource::<PersistentIdAllocator>()
+            .init_resource::<RandomStreams>()
             .add_systems(Startup, bootstrap_game)
             .add_systems(
                 Update,
@@ -131,6 +130,8 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.remove_resource::<ActionDecision>();
     world.remove_resource::<ActionOutcomeLog>();
     world.remove_resource::<CurrentActor>();
+    world.insert_resource(RandomStreams::seeded(0));
+    world.insert_resource(PersistentIdAllocator::default());
 
     let player_def = world
         .resource::<ContentRegistry>()
@@ -274,11 +275,10 @@ fn spawn_actor(
 }
 
 fn next_persistent_id(world: &mut World) -> u64 {
-    let mut counter = world
-        .get_resource_mut::<PersistentIdCounter>()
-        .expect("persistent id counter");
-    counter.0 += 1;
-    counter.0
+    let mut allocator = world
+        .get_resource_mut::<PersistentIdAllocator>()
+        .expect("persistent id allocator");
+    allocator.allocate().0
 }
 
 fn insert_occupant(

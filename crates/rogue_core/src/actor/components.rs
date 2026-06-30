@@ -2,7 +2,6 @@ use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 
 use crate::world::map::{GridPosition, LevelId};
-
 #[derive(Component)]
 pub struct Actor;
 
@@ -55,6 +54,33 @@ pub struct LastKnownPlayerPosition {
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PersistentId(pub u64);
+
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersistentIdAllocator {
+    next_id: u64,
+}
+
+impl Default for PersistentIdAllocator {
+    fn default() -> Self {
+        Self { next_id: 1 }
+    }
+}
+
+impl PersistentIdAllocator {
+    pub fn allocate(&mut self) -> PersistentId {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        PersistentId(id)
+    }
+
+    pub fn next_available(&self) -> u64 {
+        self.next_id
+    }
+
+    pub fn set_next_available(&mut self, next_id: u64) {
+        self.next_id = next_id.max(1);
+    }
+}
 
 #[derive(Component, Debug, Clone, Default)]
 pub enum AiGoal {
