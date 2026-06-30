@@ -1,13 +1,12 @@
-use bevy_app::{App, Update};
-use bevy_ecs::prelude::*;
+use bevy_app::App;
 use bevy_math::IVec2;
 use rogue_core::actor::components::Vision;
 use rogue_core::actor::components::{BlocksSight, Player};
 use rogue_core::simulation::SimulationPlugin;
+use rogue_core::simulation::SimulationStep;
 use rogue_core::world::fov::recalculate_fov_for_player;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
-use rogue_core::world::spatial::update_spatial_index;
 use rogue_core::world::tile::TileKind;
 
 fn recalculate(
@@ -116,14 +115,6 @@ fn sight_blockers_on_other_levels_do_not_occlude_the_active_level() {
 fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
-    app.add_systems(
-        Update,
-        (
-            update_spatial_index,
-            rogue_core::world::fov::recalculate_fov,
-        )
-            .chain(),
-    );
 
     let level = LevelId(0);
     let player_cell = IVec2::new(2, 3);
@@ -156,7 +147,7 @@ fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
     app.world_mut().insert_resource(level_map);
     app.world_mut().insert_resource(SpatialIndex::default());
 
-    app.update();
+    app.world_mut().run_schedule(SimulationStep);
 
     assert!(
         !app.world()
@@ -175,7 +166,7 @@ fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
         cell: IVec2::new(6, 6),
     });
 
-    app.update();
+    app.world_mut().run_schedule(SimulationStep);
 
     assert!(
         app.world()
