@@ -2,6 +2,7 @@ use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
@@ -9,15 +10,16 @@ use rogue_core::actor::components::{
     ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer,
     PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
+use rogue_core::item::components::{Inventory, Item};
 use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
-    ActionKindSnapshot, GameSnapshot, snapshot_digest, snapshot_world,
+    ActionKindSnapshot, GameSnapshot, snapshot_digest, snapshot_from_text, snapshot_world,
 };
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::time::clock::{CurrentActor, TurnClock};
 use rogue_core::world::fov::recalculate_fov_for_player;
-use rogue_core::world::generation::generate_one_room;
+use rogue_core::world::generation::generate_one_room_with_rng;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
 
@@ -33,24 +35,67 @@ fn load_fixture() -> ReplayFixture {
         .expect("deterministic replay fixture")
 }
 
-fn command_to_action_kind(command: &ActionKindSnapshot) -> ActionKind {
+fn persistent_entity_map(world: &mut World) -> HashMap<u64, Entity> {
+    let mut entities = HashMap::new();
+    let mut query = world.query::<(Entity, &PersistentId)>();
+    for (entity, id) in query.iter(world) {
+        entities.insert(id.0, entity);
+    }
+    entities
+}
+
+fn command_to_action_kind(
+    entity_map: &HashMap<u64, Entity>,
+    command: &ActionKindSnapshot,
+) -> ActionKind {
     match command {
         ActionKindSnapshot::Wait => ActionKind::Wait,
         ActionKindSnapshot::Move { dx, dy } => ActionKind::Move {
             delta: IVec2::new(*dx, *dy),
         },
-        ActionKindSnapshot::Melee { .. } => {
-            panic!("fixture melee commands are not used in this replay test")
-        }
-        ActionKindSnapshot::PickUp { .. } => {
-            panic!("fixture pick-up commands are not used in this replay test")
-        }
-        ActionKindSnapshot::Drop { .. } => {
-            panic!("fixture drop commands are not used in this replay test")
-        }
-        ActionKindSnapshot::UseItem { .. } => {
-            panic!("fixture item-use commands are not used in this replay test")
-        }
+        ActionKindSnapshot::Melee { target } => ActionKind::Melee {
+            target: entity_map
+                .get(target)
+                .copied()
+                .unwrap_or_else(|| panic!("missing entity for persistent id {}", target)),
+        },
+        ActionKindSnapshot::PickUp { item } => ActionKind::PickUp {
+            item: entity_map
+                .get(item)
+                .copied()
+                .unwrap_or_else(|| panic!("missing entity for persistent id {}", item)),
+        },
+        ActionKindSnapshot::Drop { item } => ActionKind::Drop {
+            item: entity_map
+                .get(item)
+                .copied()
+                .unwrap_or_else(|| panic!("missing entity for persistent id {}", item)),
+        },
+        ActionKindSnapshot::UseItem { item, target } => ActionKind::UseItem {
+            item: entity_map
+                .get(item)
+                .copied()
+                .unwrap_or_else(|| panic!("missing entity for persistent id {}", item)),
+            target: match target {
+                rogue_core::persistence::snapshot::ActionTargetSnapshot::SelfTarget => {
+                    rogue_core::action::intent::ActionTarget::SelfTarget
+                }
+                rogue_core::persistence::snapshot::ActionTargetSnapshot::Entity(id) => {
+                    rogue_core::action::intent::ActionTarget::Entity(
+                        entity_map
+                            .get(id)
+                            .copied()
+                            .unwrap_or_else(|| panic!("missing entity for persistent id {}", id)),
+                    )
+                }
+                rogue_core::persistence::snapshot::ActionTargetSnapshot::Cell { level, x, y } => {
+                    rogue_core::action::intent::ActionTarget::Cell {
+                        level: LevelId(*level),
+                        position: IVec2::new(*x, *y),
+                    }
+                }
+            },
+        },
         ActionKindSnapshot::Descend => ActionKind::Descend,
         ActionKindSnapshot::Ascend => ActionKind::Ascend,
     }
@@ -84,9 +129,13 @@ fn build_spatial_index(world: &mut World) {
 }
 
 fn initialize_world(app: &mut App, seed: u64) {
-    app.world_mut().insert_resource(generate_one_room(7, 7));
-    app.world_mut().insert_resource(SpatialIndex::default());
     app.world_mut().insert_resource(RandomStreams::seeded(seed));
+    let map = {
+        let mut rng = app.world_mut().resource_mut::<RandomStreams>();
+        generate_one_room_with_rng(7, 7, Some(&mut *rng))
+    };
+    app.world_mut().insert_resource(map);
+    app.world_mut().insert_resource(SpatialIndex::default());
     app.world_mut()
         .insert_resource(PersistentIdAllocator::default());
     app.world_mut()
@@ -104,6 +153,18 @@ fn initialize_world(app: &mut App, seed: u64) {
         let world = app.world_mut();
         allocate_persistent_id(world)
     };
+    let loot_persistent_id = {
+        let world = app.world_mut();
+        allocate_persistent_id(world)
+    };
+    let loot_proto = {
+        let mut rng = app.world_mut().resource_mut::<RandomStreams>();
+        if rng.next_loot_u64() & 1 == 0 {
+            "healing_potion"
+        } else {
+            "trinket"
+        }
+    };
 
     let player = {
         let entity = app.world_mut().spawn((
@@ -112,7 +173,7 @@ fn initialize_world(app: &mut App, seed: u64) {
             BlocksMovement,
             BlocksSight,
             Health {
-                current: 10,
+                current: 8,
                 maximum: 10,
             },
             CombatStats {
@@ -124,6 +185,7 @@ fn initialize_world(app: &mut App, seed: u64) {
                 ticks_per_action: 100,
             },
             PrototypeId("player".to_string()),
+            Inventory::new(4),
             GridPosition {
                 level: LevelId(0),
                 cell: IVec2::new(2, 2),
@@ -161,6 +223,19 @@ fn initialize_world(app: &mut App, seed: u64) {
         entity.id()
     };
 
+    let _loot = {
+        let entity = app.world_mut().spawn((
+            Item,
+            PrototypeId(loot_proto.to_string()),
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(2, 2),
+            },
+            loot_persistent_id,
+        ));
+        entity.id()
+    };
+
     app.world_mut()
         .resource_mut::<TurnClock>()
         .schedule_at(player, 0);
@@ -190,15 +265,16 @@ fn initialize_world(app: &mut App, seed: u64) {
 }
 
 fn drive_command(app: &mut App, command: &ActionKindSnapshot) {
-    let player = {
+    let (player, entity_map) = {
         let world = app.world_mut();
         let mut query = world.query_filtered::<Entity, With<Player>>();
-        query.iter(world).next().expect("player entity")
+        let player = query.iter(world).next().expect("player entity");
+        (player, persistent_entity_map(world))
     };
 
     app.world_mut().resource_mut::<ActionQueue>().push(Action {
         actor: player,
-        kind: command_to_action_kind(command),
+        kind: command_to_action_kind(&entity_map, command),
     });
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     rogue_core::drive_simulation(app.world_mut());
@@ -211,6 +287,21 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
 
     for command in &fixture.commands {
         drive_command(&mut app, command);
+    }
+
+    let monster = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<HostileToPlayer>>();
+        query.iter(world).next().expect("monster entity")
+    };
+    *app.world_mut().resource_mut::<CurrentActor>() = CurrentActor(Some(monster));
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+    rogue_core::drive_simulation(app.world_mut());
+    {
+        let mut rng = app.world_mut().resource_mut::<RandomStreams>();
+        rng.next_ai_u64();
+        rng.next_combat_u64();
+        rng.next_loot_u64();
     }
 
     snapshot_world(app.world()).expect("snapshot should be valid")
@@ -227,12 +318,25 @@ fn replay_fixture_produces_a_stable_digest() {
 }
 
 #[test]
+fn identical_replays_produce_identical_snapshots() {
+    let fixture = load_fixture();
+    let first = run_replay(&fixture);
+    let second = run_replay(&fixture);
+
+    assert_eq!(first, second);
+    assert_eq!(
+        snapshot_digest(&first).expect("digest"),
+        snapshot_digest(&second).expect("digest")
+    );
+}
+
+#[test]
 fn save_roundtrip_preserves_the_digest() {
     let fixture = load_fixture();
     let snapshot = run_replay(&fixture);
     let text = rogue_core::persistence::snapshot::snapshot_to_text(&snapshot).expect("serialize");
-    let restored =
-        rogue_core::persistence::snapshot::snapshot_from_text(&text).expect("deserialize");
+    let restored = migrate_snapshot(snapshot_from_text(&text).expect("deserialize"))
+        .expect("migrate snapshot");
 
     assert_eq!(snapshot, restored);
     assert_eq!(
@@ -247,5 +351,32 @@ fn future_snapshot_versions_are_rejected() {
     let mut snapshot = run_replay(&fixture);
     snapshot.version = CURRENT_SAVE_VERSION + 1;
 
-    assert!(migrate_snapshot(snapshot).is_err());
+    assert!(
+        migrate_snapshot(rogue_core::persistence::migration::SnapshotFile::Current(
+            snapshot
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn legacy_snapshot_v1_is_migrated() {
+    let snapshot = snapshot_from_text(include_str!("fixtures/legacy_snapshot_v1.ron"))
+        .expect("deserialize legacy snapshot");
+    let migrated = migrate_snapshot(snapshot).expect("migrate legacy snapshot");
+
+    assert_eq!(migrated.version, CURRENT_SAVE_VERSION);
+    assert_eq!(migrated.next_sequence, 0);
+}
+
+#[test]
+fn replay_advances_all_authoritative_rng_streams() {
+    let fixture = load_fixture();
+    let snapshot = run_replay(&fixture);
+    let initial = RandomStreams::seeded(fixture.seed).snapshot();
+
+    assert_ne!(snapshot.rng.generation_state, initial.generation_state);
+    assert_ne!(snapshot.rng.ai_state, initial.ai_state);
+    assert_ne!(snapshot.rng.combat_state, initial.combat_state);
+    assert_ne!(snapshot.rng.loot_state, initial.loot_state);
 }

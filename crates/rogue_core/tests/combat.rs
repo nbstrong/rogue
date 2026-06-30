@@ -66,8 +66,8 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
             BlocksSight,
             HostileToPlayer,
             Health {
-                current: 4,
-                maximum: 4,
+                current: 10,
+                maximum: 10,
             },
             CombatStats {
                 power: 1,
@@ -480,7 +480,7 @@ fn unsupported_actions_report_an_explicit_failure() {
         .schedule_at(player, 0);
     app.world_mut().resource_mut::<ActionQueue>().push(Action {
         actor: player,
-        kind: ActionKind::PickUp { item: player },
+        kind: ActionKind::Descend,
     });
 
     app.world_mut().run_schedule(SimulationStep);
@@ -511,7 +511,7 @@ fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
         .schedule_at(monster, 0);
     app.world_mut().resource_mut::<ActionQueue>().push(Action {
         actor: player,
-        kind: ActionKind::PickUp { item: player },
+        kind: ActionKind::Descend,
     });
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
 

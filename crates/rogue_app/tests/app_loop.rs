@@ -12,6 +12,7 @@ use rogue_app::ui::GameUiPlugin;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::Health;
 use rogue_core::actor::components::Monster;
+use rogue_core::actor::components::PersistentId;
 use rogue_core::actor::components::Player;
 use rogue_core::persistence::snapshot::{snapshot_digest, snapshot_world};
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
@@ -136,7 +137,7 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
     };
 
     assert_eq!(after_player.cell, before_player.cell + IVec2::new(1, 0));
-    assert_eq!(after_monster.cell, IVec2::new(7, 7));
+    assert_eq!(after_monster.cell, IVec2::new(8, 7));
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
@@ -329,6 +330,93 @@ fn save_and_load_round_trip_preserves_the_snapshot_digest() {
 
     assert_eq!(original_snapshot, loaded_snapshot);
     assert_eq!(original_digest, loaded_digest);
+
+    let _ = std::fs::remove_file(save_path);
+}
+
+#[test]
+fn loaded_durable_entities_do_not_leak_across_restart() {
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "rogue-save-restart-{}-{}.ron",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    let mut saved_app = build_app();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    save_world_to_path(saved_app.world(), &save_path).expect("save file");
+
+    let mut loaded_app = build_app();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    load_world_from_path(loaded_app.world_mut(), &save_path).expect("load file");
+
+    let player = {
+        let world = loaded_app.world_mut();
+        world
+            .query_filtered::<Entity, With<Player>>()
+            .iter(world)
+            .next()
+            .expect("player entity")
+    };
+    loaded_app.world_mut().entity_mut(player).insert(Health {
+        current: 0,
+        maximum: 10,
+    });
+    loaded_app
+        .world_mut()
+        .resource_mut::<rogue_core::time::clock::TurnClock>()
+        .schedule_at(player, 0);
+    loaded_app
+        .world_mut()
+        .resource_mut::<rogue_core::action::queue::ActionQueue>()
+        .push(rogue_core::action::intent::Action {
+            actor: player,
+            kind: rogue_core::action::intent::ActionKind::Wait,
+        });
+    *loaded_app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+
+    loaded_app.update();
+    loaded_app.update();
+
+    loaded_app
+        .world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyR);
+    loaded_app.update();
+    loaded_app
+        .world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyR);
+    loaded_app.update();
+    loaded_app.update();
+
+    let player_count = {
+        let world = loaded_app.world_mut();
+        world
+            .query_filtered::<Entity, With<Player>>()
+            .iter(world)
+            .count()
+    };
+    let persistent_count = {
+        let world = loaded_app.world_mut();
+        world
+            .query_filtered::<Entity, With<PersistentId>>()
+            .iter(world)
+            .count()
+    };
+
+    assert_eq!(player_count, 1);
+    assert_eq!(persistent_count, 3);
 
     let _ = std::fs::remove_file(save_path);
 }

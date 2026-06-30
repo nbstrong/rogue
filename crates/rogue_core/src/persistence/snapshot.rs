@@ -20,6 +20,7 @@ use crate::world::map::{GridPosition, LevelId, LevelMap};
 use crate::world::spatial::SpatialIndex;
 use crate::world::tile::{Tile, TileKind};
 
+use super::migration::{LegacyGameSnapshotV1, SnapshotFile};
 use super::rng::RandomStreams;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,6 +225,7 @@ pub struct GameSnapshot {
     pub root_seed: u64,
     pub current_level: u32,
     pub current_tick: u64,
+    pub next_sequence: u64,
     pub current_actor: Option<u64>,
     pub simulation_status: SimulationStatusSnapshot,
     pub persistent_ids: PersistentIdAllocatorSnapshot,
@@ -589,6 +591,9 @@ fn build_entity_snapshot(
 fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     let mut ids = HashSet::new();
     for entity in &snapshot.entities {
+        if entity.id == 0 {
+            return Err("persistent id 0 is invalid".to_string());
+        }
         if !ids.insert(entity.id) {
             return Err(format!("duplicate persistent id {}", entity.id));
         }
@@ -597,8 +602,33 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     let entity_ids: HashSet<u64> = snapshot.entities.iter().map(|entity| entity.id).collect();
     let level_ids: HashSet<u32> = snapshot.levels.iter().map(|level| level.id).collect();
 
+    if level_ids.len() != snapshot.levels.len() {
+        return Err("duplicate level ids are not allowed".to_string());
+    }
+
     if snapshot.levels.is_empty() {
         return Err("snapshot does not contain any levels".to_string());
+    }
+
+    let max_entity_id = ids.iter().copied().max().unwrap_or(0);
+    if snapshot.persistent_ids.next_available <= max_entity_id {
+        return Err(format!(
+            "persistent id allocator next_available {} must exceed max entity id {}",
+            snapshot.persistent_ids.next_available, max_entity_id
+        ));
+    }
+
+    let max_sequence = snapshot
+        .timeline
+        .iter()
+        .map(|entry| entry.sequence)
+        .max()
+        .unwrap_or(0);
+    if !snapshot.timeline.is_empty() && snapshot.next_sequence <= max_sequence {
+        return Err(format!(
+            "turn clock next_sequence {} must exceed max timeline sequence {}",
+            snapshot.next_sequence, max_sequence
+        ));
     }
 
     for level in &snapshot.levels {
@@ -798,6 +828,14 @@ fn validate_effect_references(
     }
 }
 
+fn validate_restore_support(snapshot: &GameSnapshot) -> SnapshotResult<()> {
+    if snapshot.levels.len() != 1 {
+        return Err("restore currently supports exactly one level".to_string());
+    }
+
+    Ok(())
+}
+
 pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     let map = world
         .get_resource::<LevelMap>()
@@ -824,11 +862,41 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
 
     let mut ids = HashMap::new();
     for entity in world.iter_entities() {
-        if let Some(id) = entity.get::<PersistentId>() {
+        let durable = entity.contains::<Actor>() || entity.contains::<Item>();
+        let persistent_id = entity.get::<PersistentId>();
+
+        if durable && persistent_id.is_none() {
+            return Err(format!(
+                "durable entity {:?} is missing a persistent id",
+                entity.id()
+            ));
+        }
+
+        if let Some(id) = persistent_id {
+            if id.0 == 0 {
+                return Err(format!(
+                    "persistent id 0 is invalid for entity {:?}",
+                    entity.id()
+                ));
+            }
+            if durable && entity.get::<PrototypeId>().is_none() {
+                return Err(format!(
+                    "durable entity {:?} is missing a prototype id",
+                    entity.id()
+                ));
+            }
             if ids.insert(entity.id(), id.0).is_some() {
                 return Err(format!("duplicate persistent id {}", id.0));
             }
         }
+    }
+
+    let max_entity_id = ids.values().copied().max().unwrap_or(0);
+    if allocator.next_available <= max_entity_id {
+        return Err(format!(
+            "persistent id allocator next_available {} must exceed max entity id {}",
+            allocator.next_available, max_entity_id
+        ));
     }
 
     let mut entities = Vec::new();
@@ -891,6 +959,10 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
             .get_resource::<TurnClock>()
             .map(|clock| clock.current_tick)
             .unwrap_or_default(),
+        next_sequence: world
+            .get_resource::<TurnClock>()
+            .map(|clock| clock.next_sequence)
+            .unwrap_or_default(),
         current_actor,
         simulation_status: simulation_status.clone(),
         persistent_ids: allocator.clone(),
@@ -909,6 +981,10 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         current_tick: world
             .get_resource::<TurnClock>()
             .map(|clock| clock.current_tick)
+            .unwrap_or_default(),
+        next_sequence: world
+            .get_resource::<TurnClock>()
+            .map(|clock| clock.next_sequence)
             .unwrap_or_default(),
         current_actor,
         simulation_status,
@@ -984,11 +1060,7 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
 
 pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResult<()> {
     validate_snapshot_shape(snapshot)?;
-    clear_simulation_state(world);
-
-    if snapshot.levels.len() != 1 {
-        return Err("restore currently supports exactly one level".to_string());
-    }
+    validate_restore_support(snapshot)?;
 
     let level = &snapshot.levels[0];
     let mut map = LevelMap::new(level.width, level.height, TileKind::Wall);
@@ -1003,12 +1075,19 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
 
     let mut allocator = PersistentIdAllocator::default();
     allocator.set_next_available(snapshot.persistent_ids.next_available);
+
+    clear_simulation_state(world);
+
     world.insert_resource(map);
     world.insert_resource(RandomStreams::from_snapshot(&snapshot.rng));
     world.insert_resource(allocator);
     world.insert_resource(ActionQueue::default());
     world.insert_resource(EffectQueue::default());
-    world.insert_resource(TurnClock::default());
+    world.insert_resource(TurnClock {
+        current_tick: snapshot.current_tick,
+        next_sequence: snapshot.next_sequence,
+        timeline: std::collections::BinaryHeap::new(),
+    });
     world.insert_resource(CurrentActor::default());
     world.insert_resource(SimulationStatus::from(snapshot.simulation_status.clone()));
 
@@ -1117,14 +1196,6 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
     }
 
     if let Some(mut clock) = world.get_resource_mut::<TurnClock>() {
-        clock.current_tick = snapshot.current_tick;
-        clock.next_sequence = snapshot
-            .timeline
-            .iter()
-            .map(|entry| entry.sequence)
-            .max()
-            .map(|sequence| sequence.saturating_add(1))
-            .unwrap_or(0);
         for entry in &snapshot.timeline {
             clock.timeline.push(std::cmp::Reverse(ScheduledActor {
                 next_tick: entry.next_tick,
@@ -1174,16 +1245,34 @@ pub fn digest_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
-pub fn snapshot_from_bytes(bytes: &[u8]) -> SnapshotResult<GameSnapshot> {
-    ron::de::from_bytes(bytes).map_err(|err| err.to_string())
+pub fn snapshot_from_bytes(bytes: &[u8]) -> SnapshotResult<SnapshotFile> {
+    match ron::de::from_bytes::<GameSnapshot>(bytes) {
+        Ok(snapshot) => Ok(SnapshotFile::Current(snapshot)),
+        Err(current_err) => match ron::de::from_bytes::<LegacyGameSnapshotV1>(bytes) {
+            Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
+            Err(legacy_err) => Err(format!(
+                "failed to deserialize current snapshot: {}; legacy snapshot: {}",
+                current_err, legacy_err
+            )),
+        },
+    }
 }
 
 pub fn snapshot_to_bytes(snapshot: &GameSnapshot) -> SnapshotResult<Vec<u8>> {
     snapshot_bytes(snapshot)
 }
 
-pub fn snapshot_from_text(text: &str) -> SnapshotResult<GameSnapshot> {
-    ron::from_str(text).map_err(|err| err.to_string())
+pub fn snapshot_from_text(text: &str) -> SnapshotResult<SnapshotFile> {
+    match ron::from_str::<GameSnapshot>(text) {
+        Ok(snapshot) => Ok(SnapshotFile::Current(snapshot)),
+        Err(current_err) => match ron::from_str::<LegacyGameSnapshotV1>(text) {
+            Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
+            Err(legacy_err) => Err(format!(
+                "failed to deserialize current snapshot: {}; legacy snapshot: {}",
+                current_err, legacy_err
+            )),
+        },
+    }
 }
 
 pub fn snapshot_to_text(snapshot: &GameSnapshot) -> SnapshotResult<String> {

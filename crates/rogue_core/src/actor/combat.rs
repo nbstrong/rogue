@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::persistence::rng::RandomStreams;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DamageKind {
     Melee,
@@ -16,6 +18,14 @@ pub enum StatusEffect {
 
 use crate::actor::components::CombatStats;
 
-pub fn melee_damage(attacker: CombatStats, defender: CombatStats) -> i32 {
-    (attacker.power - defender.defense).max(1)
+pub fn melee_damage(
+    attacker: CombatStats,
+    defender: CombatStats,
+    rng: Option<&mut RandomStreams>,
+) -> i32 {
+    let base = (attacker.power - defender.defense).max(1);
+    let variance = rng
+        .map(|rng| (rng.next_combat_u64() % 3) as i32 - 1)
+        .unwrap_or(0);
+    (base + variance).max(1)
 }
