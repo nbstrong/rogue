@@ -413,6 +413,34 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
 }
 
 #[test]
+fn unsupported_actions_report_an_explicit_failure() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: player,
+        kind: ActionKind::PickUp { item: player },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    assert!(matches!(
+        app.world().resource::<ActionOutcome>(),
+        ActionOutcome::Failed {
+            failure: ActionFailure::Unsupported,
+            ..
+        }
+    ));
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
+}
+
+#[test]
 fn identical_input_sequences_produce_identical_state() {
     let mut first = build_app();
     let mut second = build_app();
