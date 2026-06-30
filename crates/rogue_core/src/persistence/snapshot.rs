@@ -480,7 +480,7 @@ fn effect_from_snapshot(
 
 fn build_level_snapshot(map: &LevelMap) -> LevelSnapshot {
     LevelSnapshot {
-        id: 0,
+        id: map.id.0,
         width: map.width,
         height: map.height,
         tiles: map
@@ -1261,7 +1261,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
     validate_restore_support(snapshot)?;
 
     let level = &snapshot.levels[0];
-    let mut map = LevelMap::new(level.width, level.height, TileKind::Wall);
+    let mut map = LevelMap::with_id(LevelId(level.id), level.width, level.height, TileKind::Wall);
     if level.tiles.len() != map.tiles.len() {
         return Err("snapshot tile count did not match level dimensions".to_string());
     }

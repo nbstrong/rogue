@@ -77,10 +77,12 @@ pub fn spawn_monster(
         .id()
 }
 
-pub fn spawn_vertical_slice(commands: &mut Commands<'_, '_>) -> (Entity, Entity) {
-    let mut allocator = PersistentIdAllocator::default();
+pub fn spawn_vertical_slice(
+    commands: &mut Commands<'_, '_>,
+    allocator: &mut PersistentIdAllocator,
+) -> (Entity, Entity) {
     let level = LevelId(0);
-    let player = spawn_player(commands, &mut allocator, level, IVec2::new(2, 2));
+    let player = spawn_player(commands, allocator, level, IVec2::new(2, 2));
     let ogre = ActorDefinition {
         id: "ogre".to_string(),
         name: "Ogre".to_string(),
@@ -91,6 +93,6 @@ pub fn spawn_vertical_slice(commands: &mut Commands<'_, '_>) -> (Entity, Entity)
         vision_range: 8,
         action_speed: 120,
     };
-    let monster = spawn_monster(commands, &mut allocator, &ogre, level, IVec2::new(5, 2));
+    let monster = spawn_monster(commands, allocator, &ogre, level, IVec2::new(5, 2));
     (player, monster)
 }

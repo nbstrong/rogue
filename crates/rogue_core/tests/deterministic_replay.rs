@@ -7,11 +7,14 @@ use std::collections::HashMap;
 
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
+use rogue_core::actor::combat::StatusEffect;
 use rogue_core::actor::components::{
     ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
     HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
+use rogue_core::actor::spawn::spawn_vertical_slice;
 use rogue_core::item::components::{Inventory, Item};
+use rogue_core::item::effects::{Effect, EffectQueue, apply_pending_effects};
 use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
@@ -25,6 +28,7 @@ use rogue_core::world::fov::recalculate_fov_for_player;
 use rogue_core::world::generation::generate_one_room_with_rng;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
+use rogue_core::world::tile::TileKind;
 
 #[derive(Debug, Clone, Deserialize)]
 struct ReplayFixture {
@@ -740,4 +744,245 @@ fn malformed_snapshots_are_rejected() {
             err
         );
     }
+}
+
+#[test]
+fn spawn_vertical_slice_advances_the_authoritative_allocator() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    app.world_mut().insert_resource(RandomStreams::seeded(0));
+    app.world_mut()
+        .insert_resource(LevelMap::new(7, 7, TileKind::Floor));
+    app.world_mut().insert_resource(SpatialIndex::default());
+    app.world_mut()
+        .insert_resource(PersistentIdAllocator::default());
+    app.world_mut().insert_resource(ActionQueue::default());
+    app.world_mut().insert_resource(EffectQueue::default());
+    app.world_mut()
+        .insert_resource(SimulationStatus::WaitingForPlayer);
+    app.world_mut().insert_resource(CurrentActor::default());
+
+    let _ = app.world_mut().run_system_once(
+        |mut commands: Commands<'_, '_>, mut allocator: ResMut<'_, PersistentIdAllocator>| {
+            spawn_vertical_slice(&mut commands, &mut allocator);
+            let bonus_id = allocator.allocate();
+            commands.spawn((
+                Item,
+                PrototypeId("bonus".to_string()),
+                GridPosition {
+                    level: LevelId(0),
+                    cell: IVec2::new(1, 1),
+                },
+                bonus_id,
+            ));
+        },
+    );
+
+    let mut ids: Vec<u64> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&PersistentId>();
+        query.iter(world).map(|id| id.0).collect()
+    };
+    ids.sort_unstable();
+
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(
+        app.world()
+            .resource::<PersistentIdAllocator>()
+            .next_available(),
+        4
+    );
+    snapshot_world(app.world()).expect("vertical slice snapshot");
+}
+
+#[test]
+fn nonzero_level_ids_survive_restore_and_resave() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    app.world_mut().insert_resource(RandomStreams::seeded(0));
+    app.world_mut()
+        .insert_resource(LevelMap::with_id(LevelId(7), 7, 7, TileKind::Floor));
+    app.world_mut().insert_resource(SpatialIndex::default());
+    app.world_mut()
+        .insert_resource(PersistentIdAllocator::default());
+    app.world_mut().insert_resource(ActionQueue::default());
+    app.world_mut().insert_resource(EffectQueue::default());
+    app.world_mut()
+        .insert_resource(SimulationStatus::WaitingForPlayer);
+    app.world_mut().insert_resource(CurrentActor::default());
+
+    let player_id = {
+        let mut allocator = app.world_mut().resource_mut::<PersistentIdAllocator>();
+        allocator.allocate()
+    };
+    app.world_mut().spawn((
+        Actor,
+        Player,
+        BlocksMovement,
+        BlocksSight,
+        Health {
+            current: 10,
+            maximum: 10,
+        },
+        ActiveStatuses::default(),
+        CombatStats {
+            power: 3,
+            defense: 1,
+        },
+        Vision { range: 8 },
+        ActionSpeed {
+            ticks_per_action: 100,
+        },
+        PrototypeId("player".to_string()),
+        Inventory::new(8),
+        GridPosition {
+            level: LevelId(7),
+            cell: IVec2::new(2, 2),
+        },
+        player_id,
+    ));
+
+    build_spatial_index(app.world_mut());
+    let player_position = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(&GridPosition, &Vision), With<Player>>();
+        query
+            .iter(world)
+            .next()
+            .map(|(position, vision)| (*position, *vision))
+            .expect("player position")
+    };
+    let spatial = app.world().resource::<SpatialIndex>().clone();
+    let mut map = app.world_mut().resource_mut::<LevelMap>();
+    recalculate_fov_for_player(
+        &mut map,
+        &spatial,
+        player_position.0,
+        player_position.1.range,
+    );
+
+    let snapshot = snapshot_world(app.world()).expect("snapshot");
+    assert_eq!(snapshot.current_level, 7);
+    let text = snapshot_to_text(&snapshot).expect("serialize");
+    let restored = match snapshot_from_text(&text).expect("deserialize") {
+        rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V1(_) => {
+            panic!("nonzero level snapshot should not downgrade")
+        }
+    };
+
+    let mut restored_app = App::new();
+    restored_app.add_plugins(SimulationPlugin);
+    rogue_core::persistence::snapshot::restore_world(restored_app.world_mut(), &restored)
+        .expect("restore");
+    let restored_snapshot = snapshot_world(restored_app.world()).expect("restored snapshot");
+
+    assert_eq!(snapshot, restored_snapshot);
+}
+
+#[test]
+fn apply_pending_effects_batches_statuses_and_persists_them() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    app.world_mut().insert_resource(RandomStreams::seeded(0));
+    app.world_mut()
+        .insert_resource(LevelMap::new(7, 7, TileKind::Floor));
+    app.world_mut().insert_resource(SpatialIndex::default());
+    app.world_mut()
+        .insert_resource(PersistentIdAllocator::default());
+    app.world_mut().insert_resource(ActionQueue::default());
+    app.world_mut().insert_resource(EffectQueue::default());
+    app.world_mut()
+        .insert_resource(SimulationStatus::WaitingForPlayer);
+    app.world_mut().insert_resource(CurrentActor::default());
+
+    let player_id = {
+        let mut allocator = app.world_mut().resource_mut::<PersistentIdAllocator>();
+        allocator.allocate()
+    };
+    let player = app
+        .world_mut()
+        .spawn((
+            Actor,
+            Player,
+            BlocksMovement,
+            BlocksSight,
+            Health {
+                current: 10,
+                maximum: 10,
+            },
+            CombatStats {
+                power: 3,
+                defense: 1,
+            },
+            Vision { range: 8 },
+            ActionSpeed {
+                ticks_per_action: 100,
+            },
+            PrototypeId("player".to_string()),
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(2, 2),
+            },
+            player_id,
+        ))
+        .id();
+
+    app.world_mut()
+        .resource_mut::<EffectQueue>()
+        .0
+        .push_back(Effect::ApplyStatus {
+            target: player,
+            status: StatusEffect::Poisoned { remaining: 3 },
+        });
+    app.world_mut()
+        .resource_mut::<EffectQueue>()
+        .0
+        .push_back(Effect::ApplyStatus {
+            target: player,
+            status: StatusEffect::Stunned { remaining: 2 },
+        });
+
+    app.world_mut()
+        .run_system_once(apply_pending_effects)
+        .expect("apply effects");
+
+    let statuses = app
+        .world()
+        .entity(player)
+        .get::<ActiveStatuses>()
+        .expect("active statuses");
+    assert_eq!(
+        statuses.0,
+        vec![
+            StatusEffect::Poisoned { remaining: 3 },
+            StatusEffect::Stunned { remaining: 2 },
+        ]
+    );
+
+    let snapshot = snapshot_world(app.world()).expect("snapshot");
+    let text = snapshot_to_text(&snapshot).expect("serialize");
+    let restored = match snapshot_from_text(&text).expect("deserialize") {
+        rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V1(_) => {
+            panic!("status snapshot should not downgrade")
+        }
+    };
+
+    let mut restored_app = App::new();
+    restored_app.add_plugins(SimulationPlugin);
+    rogue_core::persistence::snapshot::restore_world(restored_app.world_mut(), &restored)
+        .expect("restore");
+
+    let restored_player = {
+        let world = restored_app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<Player>>();
+        query.iter(world).next().expect("restored player")
+    };
+    let restored_statuses = restored_app
+        .world()
+        .entity(restored_player)
+        .get::<ActiveStatuses>()
+        .expect("restored active statuses");
+    assert_eq!(restored_statuses.0, statuses.0);
 }

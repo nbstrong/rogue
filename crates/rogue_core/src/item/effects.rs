@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use bevy_ecs::prelude::*;
 
@@ -37,6 +37,8 @@ pub fn apply_pending_effects(
     mut statuses: Query<'_, '_, &mut ActiveStatuses>,
     mut commands: Commands<'_, '_>,
 ) {
+    let mut pending_status_inserts: HashMap<Entity, Vec<StatusEffect>> = HashMap::new();
+
     while let Some(effect) = effects.0.pop_front() {
         match effect {
             Effect::Damage { target, amount, .. } => {
@@ -59,9 +61,16 @@ pub fn apply_pending_effects(
                 if let Ok(mut active_statuses) = statuses.get_mut(target) {
                     active_statuses.0.push(status);
                 } else {
-                    commands.entity(target).insert(ActiveStatuses(vec![status]));
+                    pending_status_inserts
+                        .entry(target)
+                        .or_default()
+                        .push(status);
                 }
             }
         }
+    }
+
+    for (target, statuses) in pending_status_inserts {
+        commands.entity(target).insert(ActiveStatuses(statuses));
     }
 }
