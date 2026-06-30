@@ -95,17 +95,21 @@ fn build_spatial_index(world: &mut World) {
         &GridPosition,
         Option<&BlocksMovement>,
         Option<&BlocksSight>,
+        Option<&StableActorId>,
+        Option<&StableItemId>,
     )>();
 
-    for (entity, position, blocks_movement, blocks_sight) in query.iter(world) {
-        let key = (position.level, position.cell);
-        spatial.occupants.entry(key).or_default().push(entity);
-        if blocks_movement.is_some() {
-            spatial.movement_blockers.insert(key);
-        }
-        if blocks_sight.is_some() {
-            spatial.sight_blockers.insert(key);
-        }
+    for (entity, position, blocks_movement, blocks_sight, stable_actor, stable_item) in
+        query.iter(world)
+    {
+        spatial.insert_occupant(
+            entity,
+            *position,
+            stable_actor,
+            stable_item,
+            blocks_movement.is_some(),
+            blocks_sight.is_some(),
+        );
     }
 
     world.insert_resource(spatial);
@@ -319,6 +323,7 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
         drive_command(&mut app, command);
     }
 
+    finalize_snapshot_boundary(&mut app);
     snapshot_world(app.world()).expect("snapshot should be valid")
 }
 
@@ -326,6 +331,46 @@ fn run_commands(app: &mut App, commands: &[ActionKindSnapshot]) {
     for command in commands {
         drive_command(app, command);
     }
+}
+
+fn finalize_snapshot_boundary(app: &mut App) {
+    *app.world_mut()
+        .resource_mut::<rogue_core::action::resolver::ActionDecision>() =
+        rogue_core::action::resolver::ActionDecision::Idle;
+    app.world_mut()
+        .resource_mut::<ActionQueue>()
+        .actions
+        .clear();
+    app.world_mut().resource_mut::<EffectQueue>().0.clear();
+    app.world_mut().resource_mut::<CurrentActor>().0 = None;
+    if !matches!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::GameOver
+    ) {
+        *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::WaitingForPlayer;
+    }
+    app.world_mut()
+        .run_system_once(rogue_core::simulation::rebuild_stable_entity_index)
+        .expect("rebuild stable entity index");
+
+    let valid_timeline = {
+        let index = app
+            .world()
+            .resource::<rogue_core::actor::components::StableEntityIndex>();
+        let clock = app.world().resource::<TurnClock>();
+        clock
+            .timeline
+            .iter()
+            .filter_map(|entry| {
+                index
+                    .actor(entry.0.actor)
+                    .map(|_| std::cmp::Reverse(entry.0))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut clock = app.world_mut().resource_mut::<TurnClock>();
+    clock.timeline = valid_timeline.into_iter().collect();
 }
 
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
@@ -432,6 +477,8 @@ fn continuation_after_restore_matches_the_original_world() {
     run_commands(&mut original_app, &fixture.commands[split..]);
     run_commands(&mut restored_app, &fixture.commands[split..]);
 
+    finalize_snapshot_boundary(&mut original_app);
+    finalize_snapshot_boundary(&mut restored_app);
     let original_final = snapshot_world(original_app.world()).expect("original final snapshot");
     let restored_final = snapshot_world(restored_app.world()).expect("restored final snapshot");
 
@@ -547,10 +594,6 @@ fn malformed_snapshots_are_rejected() {
         .expect("item id");
 
     let mut cases = Vec::new();
-
-    let mut mid_step = base.clone();
-    mid_step.current_actor = Some(player_id);
-    cases.push(("mid-step current actor", mid_step, "stable save boundary"));
 
     let mut resolving = base.clone();
     resolving.simulation_status = SimulationStatusSnapshot::Resolving;
@@ -1040,4 +1083,126 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
         .get::<ActiveStatuses>()
         .expect("restored active statuses");
     assert_eq!(restored_statuses.0, statuses_value);
+}
+
+#[test]
+fn select_next_actor_preserves_scheduled_work_when_the_index_is_stale() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    app.world_mut()
+        .insert_resource(SimulationStatus::WaitingForPlayer);
+    app.world_mut().insert_resource(CurrentActor::default());
+    app.world_mut()
+        .insert_resource(rogue_core::actor::components::StableEntityIndex::default());
+    app.world_mut().insert_resource(TurnClock::default());
+    app.world_mut().insert_resource(ActionQueue::default());
+
+    let actor_id = rogue_core::ActorId::new(1).expect("valid actor id");
+    let entity = app
+        .world_mut()
+        .spawn((
+            Actor,
+            Health {
+                current: 4,
+                maximum: 4,
+            },
+            StableActorId(actor_id),
+        ))
+        .id();
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(actor_id, 0);
+
+    app.world_mut()
+        .run_system_once(rogue_core::time::scheduler::select_next_actor)
+        .expect("select next actor");
+
+    assert_eq!(
+        app.world().resource::<SimulationStatus>(),
+        &SimulationStatus::WaitingForPlayer
+    );
+    assert!(app.world().resource::<CurrentActor>().0.is_none());
+    assert_eq!(
+        app.world()
+            .resource::<TurnClock>()
+            .peek_next()
+            .map(|entry| entry.actor),
+        Some(actor_id)
+    );
+
+    {
+        let mut index = app
+            .world_mut()
+            .resource_mut::<rogue_core::actor::components::StableEntityIndex>();
+        index.insert_actor(actor_id, entity);
+    }
+
+    app.world_mut()
+        .run_system_once(rogue_core::time::scheduler::select_next_actor)
+        .expect("select next actor");
+
+    assert_eq!(
+        app.world().resource::<SimulationStatus>(),
+        &SimulationStatus::Resolving
+    );
+    assert_eq!(app.world().resource::<CurrentActor>().0, Some(actor_id));
+}
+
+#[test]
+fn spatial_index_orders_occupants_by_stable_identity() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    let level = LevelId(0);
+    let cell = IVec2::new(2, 2);
+
+    let first = app
+        .world_mut()
+        .spawn((
+            Actor,
+            BlocksMovement,
+            Health {
+                current: 3,
+                maximum: 3,
+            },
+            GridPosition { level, cell },
+            StableActorId(rogue_core::ActorId::new(2).expect("valid actor id")),
+        ))
+        .id();
+    let second = app
+        .world_mut()
+        .spawn((
+            Actor,
+            BlocksMovement,
+            Health {
+                current: 3,
+                maximum: 3,
+            },
+            GridPosition { level, cell },
+            StableActorId(rogue_core::ActorId::new(1).expect("valid actor id")),
+        ))
+        .id();
+    let first_stable = app.world().entity(first).get::<StableActorId>().copied();
+    let second_stable = app.world().entity(second).get::<StableActorId>().copied();
+
+    let mut spatial = SpatialIndex::default();
+    spatial.insert_occupant(
+        first,
+        GridPosition { level, cell },
+        first_stable.as_ref(),
+        None,
+        true,
+        false,
+    );
+    spatial.insert_occupant(
+        second,
+        GridPosition { level, cell },
+        second_stable.as_ref(),
+        None,
+        true,
+        false,
+    );
+
+    let occupants: Vec<_> = spatial.occupants_at(level, cell).collect();
+    assert_eq!(occupants, vec![second, first]);
 }

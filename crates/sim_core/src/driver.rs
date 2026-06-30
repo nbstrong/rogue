@@ -3,8 +3,9 @@ use std::collections::BinaryHeap;
 
 use crate::time::{SimClock, SimSpeed};
 use crate::work_budget::{SimulationWorkBudget, WorkBudgetProgress};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Cadence {
     Tactical,
     Minute,
@@ -25,12 +26,13 @@ impl Cadence {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DueWork<Id> {
     pub cadence: Cadence,
     pub due_minute: u64,
     pub sequence: u64,
     pub id: Id,
+    pub domain_event_cost: usize,
 }
 
 impl<Id: Ord> Ord for DueWork<Id> {
@@ -56,7 +58,11 @@ impl<Id: Ord> PartialOrd for DueWork<Id> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Id: Serialize",
+    deserialize = "Id: Deserialize<'de> + Ord"
+))]
 pub struct WorkBacklog<Id> {
     queue: BinaryHeap<Reverse<DueWork<Id>>>,
 }
@@ -87,7 +93,11 @@ impl<Id: Ord + Copy> WorkBacklog<Id> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Id: Serialize",
+    deserialize = "Id: Deserialize<'de> + Ord"
+))]
 pub struct DeterministicDriver<Id> {
     pub clock: SimClock,
     pub budget: SimulationWorkBudget,
@@ -128,7 +138,7 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
 
     pub fn run_frame<F>(&mut self, mut apply: F)
     where
-        F: FnMut(DueWork<Id>) -> usize,
+        F: FnMut(&SimClock, DueWork<Id>) -> usize,
     {
         let target = self
             .pending_target_minute
@@ -142,14 +152,24 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
                 break;
             }
 
+            if next.domain_event_cost > self.budget.remaining_domain_events(&self.progress) {
+                break;
+            }
+
             let work = self.backlog.pop().expect("backlog peek/pop mismatch");
             if processed_minute < work.due_minute {
                 processed_minute = work.due_minute;
             }
 
-            let produced = apply(work);
+            self.clock.minute = processed_minute;
+            let produced = apply(&self.clock, work);
             self.progress.consume_step();
-            self.progress.consume_domain_events(produced.max(1));
+            self.progress
+                .consume_domain_events(work.domain_event_cost.max(1));
+            debug_assert!(
+                produced <= work.domain_event_cost,
+                "work item exceeded its declared domain event cost"
+            );
         }
 
         let exhausted = self.budget.exhausted(&self.progress);

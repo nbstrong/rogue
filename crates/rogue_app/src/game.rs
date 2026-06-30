@@ -198,11 +198,41 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
         }
     };
     let loot = spawn_loot_item(world, level, loot_cell, loot_name);
+    let player_stable_id = world.entity(player).get::<StableActorId>().copied();
+    let monster_stable_id = world.entity(monster).get::<StableActorId>().copied();
+    let loot_stable_id = world.entity(loot).get::<StableItemId>().copied();
 
     let mut spatial = SpatialIndex::default();
-    insert_occupant(&mut spatial, level, player_cell, player, true, true);
-    insert_occupant(&mut spatial, level, monster_cell, monster, true, true);
-    insert_occupant(&mut spatial, level, loot_cell, loot, false, false);
+    insert_occupant(
+        &mut spatial,
+        player_stable_id.as_ref(),
+        None,
+        level,
+        player_cell,
+        player,
+        true,
+        true,
+    );
+    insert_occupant(
+        &mut spatial,
+        monster_stable_id.as_ref(),
+        None,
+        level,
+        monster_cell,
+        monster,
+        true,
+        true,
+    );
+    insert_occupant(
+        &mut spatial,
+        None,
+        loot_stable_id.as_ref(),
+        level,
+        loot_cell,
+        loot,
+        false,
+        false,
+    );
 
     if let Some((_, vision)) = world
         .query_filtered::<(&GridPosition, &Vision), With<Player>>()
@@ -378,20 +408,23 @@ fn next_persistent_id(world: &mut World) -> u64 {
 
 fn insert_occupant(
     spatial: &mut SpatialIndex,
+    stable_actor: Option<&StableActorId>,
+    stable_item: Option<&StableItemId>,
     level: LevelId,
     cell: IVec2,
     entity: Entity,
     blocks_movement: bool,
     blocks_sight: bool,
 ) {
-    let key = (level, cell);
-    spatial.occupants.entry(key).or_default().push(entity);
-    if blocks_movement {
-        spatial.movement_blockers.insert(key);
-    }
-    if blocks_sight {
-        spatial.sight_blockers.insert(key);
-    }
+    let position = GridPosition { level, cell };
+    spatial.insert_occupant(
+        entity,
+        position,
+        stable_actor,
+        stable_item,
+        blocks_movement,
+        blocks_sight,
+    );
 }
 
 fn drive_simulation_if_resolving(world: &mut World) {

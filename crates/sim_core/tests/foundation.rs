@@ -61,32 +61,35 @@ fn work_budget_continues_without_reordering() {
         maximum_steps_per_frame: 1,
         maximum_domain_events_per_frame: 2,
     };
-    driver.clock.speed = SimSpeed::Normal;
+    driver.clock.speed = SimSpeed::VeryFast;
     driver.enqueue(DueWork {
         cadence: Cadence::Minute,
         due_minute: 1,
         sequence: 1,
         id: 4,
+        domain_event_cost: 1,
     });
     driver.enqueue(DueWork {
         cadence: Cadence::Minute,
         due_minute: 0,
         sequence: 0,
         id: 1,
+        domain_event_cost: 1,
     });
     driver.enqueue(DueWork {
         cadence: Cadence::Hour,
         due_minute: 0,
         sequence: 2,
         id: 2,
+        domain_event_cost: 1,
     });
 
     let mut processed = Vec::new();
     while !driver.backlog.is_empty() {
         driver.begin_frame();
-        driver.run_frame(|work| {
+        driver.run_frame(|_, work| {
             processed.push(work.id);
-            1
+            work.domain_event_cost
         });
     }
 
@@ -100,31 +103,34 @@ fn work_budget_orders_same_minute_by_cadence_then_sequence() {
         maximum_steps_per_frame: 8,
         maximum_domain_events_per_frame: 8,
     };
-    driver.clock.speed = SimSpeed::Normal;
+    driver.clock.speed = SimSpeed::VeryFast;
     driver.enqueue(DueWork {
         cadence: Cadence::Hour,
         due_minute: 0,
         sequence: 3,
         id: 3,
+        domain_event_cost: 1,
     });
     driver.enqueue(DueWork {
         cadence: Cadence::Tactical,
         due_minute: 0,
         sequence: 2,
         id: 2,
+        domain_event_cost: 1,
     });
     driver.enqueue(DueWork {
         cadence: Cadence::Tactical,
         due_minute: 0,
         sequence: 1,
         id: 1,
+        domain_event_cost: 1,
     });
 
     let mut processed = Vec::new();
     driver.begin_frame();
-    driver.run_frame(|work| {
+    driver.run_frame(|_, work| {
         processed.push(work.id);
-        1
+        work.domain_event_cost
     });
 
     assert_eq!(processed, vec![1, 2, 3]);
@@ -174,6 +180,86 @@ fn turn_clock_uses_stable_tie_breaking() {
 
     assert_eq!(first.actor, 9);
     assert_eq!(second.actor, 1);
+}
+
+#[test]
+fn driver_exposes_the_due_clock_to_callbacks() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 4,
+    };
+    driver.clock.speed = SimSpeed::VeryFast;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 7,
+        sequence: 0,
+        id: 11,
+        domain_event_cost: 2,
+    });
+
+    let mut observed_minutes = Vec::new();
+    driver.begin_frame();
+    driver.run_frame(|clock, work| {
+        observed_minutes.push((clock.minute, work.due_minute));
+        work.domain_event_cost
+    });
+
+    assert_eq!(observed_minutes, vec![(7, 7)]);
+}
+
+#[test]
+fn driver_roundtrip_preserves_backlog_and_progress() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 1,
+        maximum_domain_events_per_frame: 2,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 1,
+        id: 2,
+        domain_event_cost: 1,
+    });
+
+    driver.begin_frame();
+    driver.run_frame(|_, work| work.domain_event_cost);
+
+    let encoded = ron::to_string(&driver).expect("driver snapshot");
+    let mut restored: DeterministicDriver<u64> = ron::from_str(&encoded).expect("driver restore");
+
+    let mut uninterrupted = driver.clone();
+
+    let mut resumed_processed = Vec::new();
+    restored.begin_frame();
+    restored.run_frame(|_, work| {
+        resumed_processed.push(work.id);
+        work.domain_event_cost
+    });
+
+    let mut expected_processed = Vec::new();
+    uninterrupted.begin_frame();
+    uninterrupted.run_frame(|_, work| {
+        expected_processed.push(work.id);
+        work.domain_event_cost
+    });
+
+    assert_eq!(resumed_processed, expected_processed);
+    assert_eq!(restored.clock.minute, uninterrupted.clock.minute);
+    assert_eq!(restored.progress, uninterrupted.progress);
+    assert_eq!(
+        restored.backlog.peek().map(|work| work.id),
+        uninterrupted.backlog.peek().map(|work| work.id)
+    );
 }
 
 #[test]

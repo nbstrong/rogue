@@ -63,6 +63,26 @@ fn item_id(world: &World, entity: Entity) -> ItemId {
     ItemId::new(entity.to_bits()).expect("valid item id")
 }
 
+fn register_spatial_occupant(
+    spatial: &mut SpatialIndex,
+    entity: Entity,
+    level: LevelId,
+    cell: IVec2,
+    stable_actor: Option<StableActorId>,
+    stable_item: Option<StableItemId>,
+    blocks_movement: bool,
+    blocks_sight: bool,
+) {
+    spatial.insert_occupant(
+        entity,
+        GridPosition { level, cell },
+        stable_actor.as_ref(),
+        stable_item.as_ref(),
+        blocks_movement,
+        blocks_sight,
+    );
+}
+
 fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
     let level = LevelId(0);
     app.world_mut().insert_resource(generate_one_room(7, 7));
@@ -131,16 +151,28 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         .id();
     tag_actor(app.world_mut(), monster);
 
-    spatial
-        .occupants
-        .insert((level, IVec2::new(2, 2)), vec![player]);
-    spatial.movement_blockers.insert((level, IVec2::new(2, 2)));
-    spatial.sight_blockers.insert((level, IVec2::new(2, 2)));
-    spatial
-        .occupants
-        .insert((level, IVec2::new(3, 2)), vec![monster]);
-    spatial.movement_blockers.insert((level, IVec2::new(3, 2)));
-    spatial.sight_blockers.insert((level, IVec2::new(3, 2)));
+    let player_stable = app.world().entity(player).get::<StableActorId>().copied();
+    let monster_stable = app.world().entity(monster).get::<StableActorId>().copied();
+    register_spatial_occupant(
+        &mut spatial,
+        player,
+        level,
+        IVec2::new(2, 2),
+        player_stable,
+        None,
+        true,
+        true,
+    );
+    register_spatial_occupant(
+        &mut spatial,
+        monster,
+        level,
+        IVec2::new(3, 2),
+        monster_stable,
+        None,
+        true,
+        true,
+    );
     app.world_mut().insert_resource(spatial);
     build_stable_entity_index(app.world_mut());
 
@@ -304,12 +336,20 @@ fn moving_over_an_item_does_not_damage_it() {
         .id();
     tag_item(app.world_mut(), item);
 
-    app.world_mut()
-        .resource_mut::<SpatialIndex>()
-        .occupants
-        .entry((LevelId(0), IVec2::new(2, 3)))
-        .or_default()
-        .push(item);
+    {
+        let item_stable = app.world().entity(item).get::<StableItemId>().copied();
+        let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
+        register_spatial_occupant(
+            &mut spatial,
+            item,
+            LevelId(0),
+            IVec2::new(2, 3),
+            None,
+            item_stable,
+            false,
+            false,
+        );
+    }
 
     push_action!(
         app,
@@ -352,15 +392,18 @@ fn moving_into_a_friendly_blocker_is_rejected() {
     tag_actor(app.world_mut(), blocker);
 
     {
+        let blocker_stable = app.world().entity(blocker).get::<StableActorId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(2, 3)))
-            .or_default()
-            .push(blocker);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(2, 3)));
+        register_spatial_occupant(
+            &mut spatial,
+            blocker,
+            LevelId(0),
+            IVec2::new(2, 3),
+            blocker_stable,
+            None,
+            true,
+            false,
+        );
     }
 
     push_action!(
@@ -414,18 +457,18 @@ fn non_hostile_actor_does_not_bump_the_player() {
     tag_actor(app.world_mut(), neutral);
 
     {
+        let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(1, 2)))
-            .or_default()
-            .push(neutral);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
-        spatial
-            .sight_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
+        register_spatial_occupant(
+            &mut spatial,
+            neutral,
+            LevelId(0),
+            IVec2::new(1, 2),
+            neutral_stable,
+            None,
+            true,
+            true,
+        );
     }
 
     build_stable_entity_index(app.world_mut());
@@ -479,18 +522,18 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
     build_stable_entity_index(app.world_mut());
 
     {
+        let target_stable = app.world().entity(target).get::<StableActorId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(5, 5)))
-            .or_default()
-            .push(target);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(5, 5)));
-        spatial
-            .sight_blockers
-            .insert((LevelId(0), IVec2::new(5, 5)));
+        register_spatial_occupant(
+            &mut spatial,
+            target,
+            LevelId(0),
+            IVec2::new(5, 5),
+            target_stable,
+            None,
+            true,
+            true,
+        );
     }
 
     push_action!(
@@ -796,18 +839,18 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
         .id();
 
     {
+        let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(1, 2)))
-            .or_default()
-            .push(neutral);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
-        spatial
-            .sight_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
+        register_spatial_occupant(
+            &mut spatial,
+            neutral,
+            LevelId(0),
+            IVec2::new(1, 2),
+            neutral_stable,
+            None,
+            true,
+            true,
+        );
     }
 
     schedule_actor!(app, neutral, 0);
@@ -825,7 +868,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
             .resource::<TurnClock>()
             .peek_next()
             .map(|next| next.actor),
-        None
+        Some(actor_id(app.world(), player))
     );
 
     let outcome_log = app.world().resource::<ActionOutcomeLog>();

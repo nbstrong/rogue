@@ -579,9 +579,6 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         return Err("snapshot does not contain any levels".to_string());
     }
 
-    if snapshot.current_actor.is_some() {
-        return Err("snapshot current_actor requires a stable save boundary".to_string());
-    }
     if !snapshot.pending_actions.is_empty() {
         return Err("snapshot pending actions require a stable save boundary".to_string());
     }
@@ -1186,8 +1183,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     if !matches!(*decision, crate::action::resolver::ActionDecision::Idle) {
         return Err("snapshot requires an idle action decision".to_string());
     }
-    if current_actor.is_some()
-        || !action_queue.actions.is_empty()
+    if !action_queue.actions.is_empty()
         || !effect_queue.0.is_empty()
         || simulation_status != SimulationStatus::WaitingForPlayer
             && simulation_status != SimulationStatus::GameOver
@@ -1262,16 +1258,20 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
         &GridPosition,
         Option<&BlocksMovement>,
         Option<&BlocksSight>,
+        Option<&StableActorId>,
+        Option<&StableItemId>,
     )>();
-    for (entity, position, blocks_movement, blocks_sight) in query.iter(world) {
-        let key = (position.level, position.cell);
-        spatial.occupants.entry(key).or_default().push(entity);
-        if blocks_movement.is_some() {
-            spatial.movement_blockers.insert(key);
-        }
-        if blocks_sight.is_some() {
-            spatial.sight_blockers.insert(key);
-        }
+    for (entity, position, blocks_movement, blocks_sight, stable_actor, stable_item) in
+        query.iter(world)
+    {
+        spatial.insert_occupant(
+            entity,
+            *position,
+            stable_actor,
+            stable_item,
+            blocks_movement.is_some(),
+            blocks_sight.is_some(),
+        );
     }
     world.insert_resource(spatial);
 

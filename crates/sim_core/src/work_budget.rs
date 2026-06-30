@@ -1,6 +1,7 @@
 use bevy_ecs::prelude::Resource;
+use serde::{Deserialize, Serialize};
 
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimulationWorkBudget {
     pub maximum_steps_per_frame: usize,
     pub maximum_domain_events_per_frame: usize,
@@ -15,7 +16,7 @@ impl Default for SimulationWorkBudget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct WorkBudgetProgress {
     pub steps_consumed: usize,
     pub domain_events_consumed: usize,

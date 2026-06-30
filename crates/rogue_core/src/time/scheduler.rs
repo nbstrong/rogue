@@ -1,4 +1,5 @@
 use bevy_ecs::prelude::*;
+use std::cmp::Reverse;
 
 use crate::action::queue::ActionQueue;
 use crate::actor::components::{Player, StableActorId, StableEntityIndex};
@@ -18,17 +19,32 @@ pub fn select_next_actor(
 
     while let Some(next) = clock.pop_next() {
         let Some(entity) = stable_index.actor(next.actor) else {
-            continue;
+            if actors
+                .iter()
+                .any(|(health, stable_id)| health.current > 0 && stable_id.0 == next.actor)
+            {
+                clock.timeline.push(Reverse(next));
+            }
+            break;
         };
-        if actors
-            .get(entity)
-            .is_ok_and(|(health, stable_id)| health.current > 0 && stable_id.0 == next.actor)
-        {
-            clock.current_tick = next.next_tick;
-            current_actor.0 = Some(next.actor);
-            *status = SimulationStatus::Resolving;
-            return;
-        }
+        match actors.get(entity) {
+            Ok((health, stable_id)) if health.current > 0 && stable_id.0 == next.actor => {
+                clock.current_tick = next.next_tick;
+                current_actor.0 = Some(next.actor);
+                *status = SimulationStatus::Resolving;
+                return;
+            }
+            Ok(_) => continue,
+            Err(_) => {
+                if actors
+                    .iter()
+                    .any(|(health, stable_id)| health.current > 0 && stable_id.0 == next.actor)
+                {
+                    clock.timeline.push(Reverse(next));
+                }
+                break;
+            }
+        };
     }
 }
 
