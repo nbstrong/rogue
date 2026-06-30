@@ -139,6 +139,21 @@ fn build_spatial_index(world: &mut World) {
     world.insert_resource(spatial);
 }
 
+fn build_stable_entity_index(world: &mut World) {
+    let mut index = rogue_core::actor::components::StableEntityIndex::default();
+    let mut actors = world.query::<(Entity, &StableActorId)>();
+    for (entity, stable_id) in actors.iter(world) {
+        index.insert_actor(stable_id.0, entity);
+    }
+
+    let mut items = world.query::<(Entity, &StableItemId)>();
+    for (entity, stable_id) in items.iter(world) {
+        index.insert_item(stable_id.0, entity);
+    }
+
+    world.insert_resource(index);
+}
+
 fn initialize_world(app: &mut App, seed: u64) {
     app.world_mut().insert_resource(RandomStreams::seeded(seed));
     let map = {
@@ -266,6 +281,7 @@ fn initialize_world(app: &mut App, seed: u64) {
         .schedule_at(monster, 0);
 
     build_spatial_index(app.world_mut());
+    build_stable_entity_index(app.world_mut());
 
     let spatial = app.world().resource::<SpatialIndex>().clone();
     let player_position = {
@@ -760,6 +776,41 @@ fn malformed_snapshots_are_rejected() {
 }
 
 #[test]
+fn duplicate_stable_actor_ids_are_rejected() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    let player_id = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<Player>>();
+        query.iter(world).next().expect("player entity")
+    };
+    let monster_id = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<Monster>>();
+        query.iter(world).next().expect("monster entity")
+    };
+
+    let player_stable_id = app
+        .world()
+        .entity(player_id)
+        .get::<StableActorId>()
+        .copied()
+        .expect("player stable id");
+    app.world_mut()
+        .entity_mut(monster_id)
+        .insert(player_stable_id);
+
+    let err = snapshot_world(app.world()).expect_err("duplicate stable actor ids");
+    assert!(
+        err.contains("duplicate stable actor id"),
+        "unexpected error: {}",
+        err
+    );
+}
+
+#[test]
 fn spawn_vertical_slice_advances_the_authoritative_allocator() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
@@ -808,6 +859,7 @@ fn spawn_vertical_slice_advances_the_authoritative_allocator() {
             .next_available(),
         4
     );
+    build_stable_entity_index(app.world_mut());
     snapshot_world(app.world()).expect("vertical slice snapshot");
 }
 
@@ -880,6 +932,7 @@ fn nonzero_level_ids_survive_restore_and_resave() {
         player_position.1.range,
     );
 
+    build_stable_entity_index(app.world_mut());
     let snapshot = snapshot_world(app.world()).expect("snapshot");
     assert_eq!(snapshot.current_level, 7);
     let text = snapshot_to_text(&snapshot).expect("serialize");
@@ -974,6 +1027,7 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
         .entity(player)
         .get::<ActiveStatuses>()
         .expect("active statuses");
+    let statuses_value = statuses.0.clone();
     assert_eq!(
         statuses.0,
         vec![
@@ -982,6 +1036,7 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
         ]
     );
 
+    build_stable_entity_index(app.world_mut());
     let snapshot = snapshot_world(app.world()).expect("snapshot");
     let text = snapshot_to_text(&snapshot).expect("serialize");
     let restored = match snapshot_from_text(&text).expect("deserialize") {
@@ -1006,5 +1061,5 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
         .entity(restored_player)
         .get::<ActiveStatuses>()
         .expect("restored active statuses");
-    assert_eq!(restored_statuses.0, statuses.0);
+    assert_eq!(restored_statuses.0, statuses_value);
 }

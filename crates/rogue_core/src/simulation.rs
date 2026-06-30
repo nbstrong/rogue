@@ -143,14 +143,13 @@ pub fn rebuild_stable_entity_index(
     actors: Query<'_, '_, (Entity, &StableActorId), With<Actor>>,
     items: Query<'_, '_, (Entity, &StableItemId), With<Item>>,
 ) {
-    index.actors.clear();
-    index.items.clear();
+    index.clear();
 
     for (entity, stable_id) in actors.iter() {
-        index.actors.insert(stable_id.0, entity);
+        index.insert_actor(stable_id.0, entity);
     }
 
     for (entity, stable_id) in items.iter() {
-        index.items.insert(stable_id.0, entity);
+        index.insert_item(stable_id.0, entity);
     }
 }

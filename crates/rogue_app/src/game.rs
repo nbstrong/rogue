@@ -326,7 +326,7 @@ fn spawn_actor(
     };
 
     if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
-        index.actors.insert(stable_actor_id, entity_id);
+        index.insert_actor(stable_actor_id, entity_id);
     }
 
     entity_id
@@ -346,7 +346,7 @@ fn spawn_loot_item(world: &mut World, level: LevelId, cell: IVec2, prototype: &s
     let entity_id = entity.id();
 
     if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
-        index.items.insert(stable_item_id, entity_id);
+        index.insert_item(stable_item_id, entity_id);
     }
 
     entity_id

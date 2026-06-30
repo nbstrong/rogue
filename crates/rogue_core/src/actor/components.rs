@@ -71,8 +71,33 @@ pub struct StableItemId(pub ItemId);
 
 #[derive(Resource, Default, Debug, Clone)]
 pub struct StableEntityIndex {
-    pub actors: HashMap<ActorId, Entity>,
-    pub items: HashMap<ItemId, Entity>,
+    actors: HashMap<ActorId, Entity>,
+    items: HashMap<ItemId, Entity>,
+}
+
+impl StableEntityIndex {
+    pub fn clear(&mut self) {
+        self.actors.clear();
+        self.items.clear();
+    }
+
+    pub fn insert_actor(&mut self, id: ActorId, entity: Entity) {
+        let previous = self.actors.insert(id, entity);
+        assert!(previous.is_none(), "duplicate stable actor id {}", id.raw());
+    }
+
+    pub fn insert_item(&mut self, id: ItemId, entity: Entity) {
+        let previous = self.items.insert(id, entity);
+        assert!(previous.is_none(), "duplicate stable item id {}", id.raw());
+    }
+
+    pub fn actor(&self, id: ActorId) -> Option<Entity> {
+        self.actors.get(&id).copied()
+    }
+
+    pub fn item(&self, id: ItemId) -> Option<Entity> {
+        self.items.get(&id).copied()
+    }
 }
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]

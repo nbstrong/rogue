@@ -1066,6 +1066,9 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         .ok_or_else(|| "missing simulation status resource".to_string())?;
 
     let mut ids = HashMap::new();
+    let mut stable_actors = HashSet::new();
+    let mut stable_items = HashSet::new();
+    let stable_index = world.get_resource::<StableEntityIndex>();
     for entity in world.iter_entities() {
         let durable = entity.contains::<Actor>() || entity.contains::<Item>();
         let persistent_id = entity.get::<PersistentId>();
@@ -1102,6 +1105,64 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
                     "durable entity {:?} is missing a prototype id",
                     entity.id()
                 ));
+            }
+            if let Some(stable) = entity.get::<StableActorId>() {
+                if !stable_actors.insert(stable.0) {
+                    return Err(format!("duplicate stable actor id {}", stable.0.raw()));
+                }
+                if stable.0.raw() != id.0 {
+                    return Err(format!(
+                        "stable actor id {} disagrees with persistent id {} on entity {:?}",
+                        stable.0.raw(),
+                        id.0,
+                        entity.id()
+                    ));
+                }
+                if let Some(index) = stable_index {
+                    let indexed = index.actor(stable.0).ok_or_else(|| {
+                        format!(
+                            "stable actor id {} missing from stable index",
+                            stable.0.raw()
+                        )
+                    })?;
+                    if indexed != entity.id() {
+                        return Err(format!(
+                            "stable actor id {} points to {:?} but entity {:?} carries it",
+                            stable.0.raw(),
+                            indexed,
+                            entity.id()
+                        ));
+                    }
+                }
+            }
+            if let Some(stable) = entity.get::<StableItemId>() {
+                if !stable_items.insert(stable.0) {
+                    return Err(format!("duplicate stable item id {}", stable.0.raw()));
+                }
+                if stable.0.raw() != id.0 {
+                    return Err(format!(
+                        "stable item id {} disagrees with persistent id {} on entity {:?}",
+                        stable.0.raw(),
+                        id.0,
+                        entity.id()
+                    ));
+                }
+                if let Some(index) = stable_index {
+                    let indexed = index.item(stable.0).ok_or_else(|| {
+                        format!(
+                            "stable item id {} missing from stable index",
+                            stable.0.raw()
+                        )
+                    })?;
+                    if indexed != entity.id() {
+                        return Err(format!(
+                            "stable item id {} points to {:?} but entity {:?} carries it",
+                            stable.0.raw(),
+                            indexed,
+                            entity.id()
+                        ));
+                    }
+                }
             }
             if ids.insert(entity.id(), id.0).is_some() {
                 return Err(format!("duplicate persistent id {}", id.0));
@@ -1412,8 +1473,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
     }
 
     if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
-        index.actors.clear();
-        index.items.clear();
+        index.clear();
         for entity in &snapshot.entities {
             let entity_id = *entity_map
                 .get(&entity.id)
@@ -1421,12 +1481,12 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             if entity.actor {
                 let actor_id = sim_core::ActorId::new(entity.id)
                     .ok_or_else(|| format!("invalid actor id {}", entity.id))?;
-                index.actors.insert(actor_id, entity_id);
+                index.insert_actor(actor_id, entity_id);
             }
             if entity.item {
                 let item_id = sim_core::ItemId::new(entity.id)
                     .ok_or_else(|| format!("invalid item id {}", entity.id))?;
-                index.items.insert(item_id, entity_id);
+                index.insert_item(item_id, entity_id);
             }
         }
     }
