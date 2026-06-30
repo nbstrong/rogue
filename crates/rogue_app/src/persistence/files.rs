@@ -125,7 +125,7 @@ fn replace_file_atomic(temp: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     #[link(name = "kernel32")]
-    extern "system" {
+    unsafe extern "system" {
         fn MoveFileExW(
             lpExistingFileName: *const u16,
             lpNewFileName: *const u16,

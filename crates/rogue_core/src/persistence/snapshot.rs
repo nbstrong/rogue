@@ -612,6 +612,7 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
 
     let entity_ids: HashSet<u64> = snapshot.entities.iter().map(|entity| entity.id).collect();
     let level_ids: HashSet<u32> = snapshot.levels.iter().map(|level| level.id).collect();
+    let mut item_owners: HashMap<u64, u64> = HashMap::new();
 
     if level_ids.len() != snapshot.levels.len() {
         return Err("duplicate level ids are not allowed".to_string());
@@ -619,6 +620,22 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
 
     if snapshot.levels.is_empty() {
         return Err("snapshot does not contain any levels".to_string());
+    }
+
+    if snapshot.current_actor.is_some() {
+        return Err("snapshot current_actor requires a stable save boundary".to_string());
+    }
+    if !snapshot.pending_actions.is_empty() {
+        return Err("snapshot pending actions require a stable save boundary".to_string());
+    }
+    if !snapshot.pending_effects.is_empty() {
+        return Err("snapshot pending effects require a stable save boundary".to_string());
+    }
+    if matches!(
+        snapshot.simulation_status,
+        SimulationStatusSnapshot::Resolving
+    ) {
+        return Err("snapshot resolving status requires a stable save boundary".to_string());
     }
 
     let max_entity_id = ids.iter().copied().max().unwrap_or(0);
@@ -659,6 +676,13 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     }
 
     for entity in &snapshot.entities {
+        if entity.inventory.is_some() && !entity.actor {
+            return Err(format!(
+                "entity {} has inventory but is not marked as an actor",
+                entity.id
+            ));
+        }
+
         if let Some(position) = &entity.position {
             if !level_ids.contains(&position.level) {
                 return Err(format!(
@@ -669,12 +693,52 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         }
 
         if let Some(inventory) = &entity.inventory {
+            if inventory.items.len() > inventory.capacity {
+                return Err(format!(
+                    "entity {} inventory exceeds its capacity",
+                    entity.id
+                ));
+            }
             for item in &inventory.items {
                 if !entity_ids.contains(item) {
                     return Err(format!(
                         "entity {} inventory references missing item {}",
                         entity.id, item
                     ));
+                }
+                let item_entity = snapshot
+                    .entities
+                    .iter()
+                    .find(|candidate| candidate.id == *item)
+                    .ok_or_else(|| {
+                        format!(
+                            "entity {} inventory references missing item {}",
+                            entity.id, item
+                        )
+                    })?;
+                if !item_entity.item {
+                    return Err(format!(
+                        "entity {} inventory references non-item {}",
+                        entity.id, item
+                    ));
+                }
+                match item_entity.carried_by {
+                    Some(owner) if owner == entity.id => {}
+                    Some(owner) => {
+                        return Err(format!(
+                            "item {} carried_by {} disagrees with inventory owner {}",
+                            item, owner, entity.id
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "item {} listed in inventory {} is missing carried_by",
+                            item, entity.id
+                        ));
+                    }
+                }
+                if item_owners.insert(*item, entity.id).is_some() {
+                    return Err(format!("item {} appears in multiple inventories", item));
                 }
             }
         }
@@ -728,6 +792,32 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
                             entity.id
                         ));
                     }
+                }
+            }
+        }
+    }
+
+    for entity in &snapshot.entities {
+        if let Some(owner) = entity.carried_by {
+            if !entity.item {
+                return Err(format!(
+                    "entity {} has carried_by but is not marked as an item",
+                    entity.id
+                ));
+            }
+            match item_owners.get(&entity.id) {
+                Some(listed_owner) if *listed_owner == owner => {}
+                Some(listed_owner) => {
+                    return Err(format!(
+                        "item {} carried_by {} disagrees with inventory owner {}",
+                        entity.id, owner, listed_owner
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "item {} carried_by {} is not listed in that inventory",
+                        entity.id, owner
+                    ));
                 }
             }
         }
@@ -1163,6 +1253,9 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             spawned.insert(ActionSpeed {
                 ticks_per_action: speed.ticks_per_action,
             });
+        }
+        if entity.actor {
+            spawned.insert(ActiveStatuses::default());
         }
         let entity_id = spawned.id();
         entity_map.insert(entity.id, entity_id);

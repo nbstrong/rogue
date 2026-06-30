@@ -8,15 +8,15 @@ use std::collections::HashMap;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::{
-    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
-    PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
 use rogue_core::item::components::{Inventory, Item};
 use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
-    ActionKindSnapshot, GameSnapshot, snapshot_digest, snapshot_from_text, snapshot_to_text,
-    snapshot_world,
+    ActionKindSnapshot, GameSnapshot, SavedInventory, snapshot_digest, snapshot_from_text,
+    snapshot_to_text, snapshot_world,
 };
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::time::clock::{CurrentActor, TurnClock};
@@ -178,6 +178,7 @@ fn initialize_world(app: &mut App, seed: u64) {
                 current: 8,
                 maximum: 10,
             },
+            ActiveStatuses::default(),
             CombatStats {
                 power: 3,
                 defense: 1,
@@ -208,6 +209,7 @@ fn initialize_world(app: &mut App, seed: u64) {
                 current: 6,
                 maximum: 6,
             },
+            ActiveStatuses::default(),
             CombatStats {
                 power: 2,
                 defense: 0,
@@ -507,4 +509,128 @@ fn failed_restore_does_not_mutate_the_live_world() {
 
     let after = snapshot_world(app.world()).expect("after snapshot");
     assert_eq!(before, after);
+}
+
+#[test]
+fn malformed_snapshots_are_rejected() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+    let base = snapshot_world(app.world()).expect("base snapshot");
+
+    let player_id = base
+        .entities
+        .iter()
+        .find(|entity| entity.player)
+        .map(|entity| entity.id)
+        .expect("player id");
+    let monster_id = base
+        .entities
+        .iter()
+        .find(|entity| entity.monster)
+        .map(|entity| entity.id)
+        .expect("monster id");
+    let item_id = base
+        .entities
+        .iter()
+        .find(|entity| entity.item)
+        .map(|entity| entity.id)
+        .expect("item id");
+
+    let mut cases = Vec::new();
+
+    let mut mid_step = base.clone();
+    mid_step.current_actor = Some(player_id);
+    cases.push(("mid-step current actor", mid_step, "stable save boundary"));
+
+    let mut resolving = base.clone();
+    resolving.simulation_status =
+        rogue_core::persistence::snapshot::SimulationStatusSnapshot::Resolving;
+    cases.push(("resolving status", resolving, "stable save boundary"));
+
+    let mut non_item = base.clone();
+    non_item
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == player_id)
+        .expect("player entity")
+        .inventory = Some(SavedInventory {
+        capacity: 4,
+        items: vec![player_id],
+    });
+    cases.push(("inventory references non-item", non_item, "non-item"));
+
+    let mut missing_carried = base.clone();
+    missing_carried
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == player_id)
+        .expect("player entity")
+        .inventory = Some(SavedInventory {
+        capacity: 4,
+        items: vec![item_id],
+    });
+    cases.push((
+        "inventory missing carried_by",
+        missing_carried,
+        "missing carried_by",
+    ));
+
+    let mut mismatch = base.clone();
+    mismatch
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == player_id)
+        .expect("player entity")
+        .inventory = Some(SavedInventory {
+        capacity: 4,
+        items: vec![item_id],
+    });
+    mismatch
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == item_id)
+        .expect("item entity")
+        .carried_by = Some(monster_id);
+    cases.push((
+        "carried_by mismatch",
+        mismatch,
+        "disagrees with inventory owner",
+    ));
+
+    let mut duplicate_inventory = base.clone();
+    duplicate_inventory
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == player_id)
+        .expect("player entity")
+        .inventory = Some(SavedInventory {
+        capacity: 4,
+        items: vec![item_id, item_id],
+    });
+    duplicate_inventory
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == item_id)
+        .expect("item entity")
+        .carried_by = Some(player_id);
+    cases.push((
+        "duplicate inventory item",
+        duplicate_inventory,
+        "appears in multiple inventories",
+    ));
+
+    for (label, snapshot, expected) in cases {
+        let mut app = App::new();
+        app.add_plugins(SimulationPlugin);
+        let err = rogue_core::persistence::snapshot::restore_world(app.world_mut(), &snapshot)
+            .expect_err(label);
+        assert!(
+            err.contains(expected),
+            "{} should mention `{}` but was `{}`",
+            label,
+            expected,
+            err
+        );
+    }
 }

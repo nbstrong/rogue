@@ -5,8 +5,8 @@ use bevy_math::IVec2;
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::{
-    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
-    PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
 use rogue_core::content::definitions::ActorDefinition;
 use rogue_core::content::registry::ContentRegistry;
@@ -290,6 +290,7 @@ fn spawn_actor(
             current: definition.maximum_health,
             maximum: definition.maximum_health,
         },
+        ActiveStatuses::default(),
         CombatStats {
             power: definition.power,
             defense: definition.defense,
