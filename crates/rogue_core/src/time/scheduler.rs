@@ -54,6 +54,7 @@ pub fn finish_simulation_step(
     queue: Res<'_, ActionQueue>,
     stable_index: Res<'_, StableEntityIndex>,
     player: Query<'_, '_, &StableActorId, With<Player>>,
+    actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId)>,
     mut status: ResMut<'_, SimulationStatus>,
 ) {
     if *status == SimulationStatus::WaitingForPlayer {
@@ -78,8 +79,13 @@ pub fn finish_simulation_step(
             return;
         }
         if stable_index.actor(next.actor).is_none() {
-            *status = SimulationStatus::WaitingForPlayer;
-            return;
+            let live_actor = actors
+                .iter()
+                .any(|(health, stable_id)| health.current > 0 && stable_id.0 == next.actor);
+            if !live_actor {
+                *status = SimulationStatus::WaitingForPlayer;
+                return;
+            }
         }
         *status = SimulationStatus::Resolving;
         return;

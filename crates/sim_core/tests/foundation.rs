@@ -324,9 +324,9 @@ fn work_items_larger_than_the_frame_budget_are_rejected() {
 
     assert_eq!(
         err,
-        sim_core::DriverError::WorkExceedsRemainingBudget {
+        sim_core::DriverError::WorkExceedsTotalBudget {
             id: 1,
-            remaining_domain_events: 3,
+            total_domain_events: 3,
             declared_cost: 4,
         }
     );
@@ -334,6 +334,7 @@ fn work_items_larger_than_the_frame_budget_are_rejected() {
 }
 
 #[test]
+#[should_panic(expected = "produced 3 events but declared only 2")]
 fn callbacks_cannot_exceed_the_declared_event_cost() {
     let mut driver = DeterministicDriver::<u64>::default();
     driver.budget = SimulationWorkBudget {
@@ -350,18 +351,77 @@ fn callbacks_cannot_exceed_the_declared_event_cost() {
     });
 
     driver.begin_frame();
-    let err = driver
-        .run_frame(|_, _| 3)
-        .expect_err("violating the declared event cost should fail");
+    let _ = driver.run_frame(|_, _| 3);
+}
 
-    assert_eq!(
-        err,
-        sim_core::DriverError::WorkProducedMoreEventsThanDeclared {
-            id: 1,
-            declared_cost: 2,
-            produced: 3,
-        }
-    );
+#[test]
+fn work_that_fits_the_total_budget_but_not_the_remaining_budget_is_deferred() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 3,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 2,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 1,
+        id: 2,
+        domain_event_cost: 2,
+    });
+
+    let mut processed = Vec::new();
+    driver.begin_frame();
+    driver
+        .run_frame(|_, work| {
+            processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("frame should stop cleanly");
+
+    assert_eq!(processed, vec![1]);
+    assert_eq!(driver.backlog.peek().map(|work| work.id), Some(2));
+
+    driver.begin_frame();
+    driver
+        .run_frame(|_, work| {
+            processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("frame should resume cleanly");
+
+    assert_eq!(processed, vec![1, 2]);
+    assert!(driver.backlog.is_empty());
+}
+
+#[test]
+fn equal_scheduling_keys_with_different_costs_remain_ordered() {
+    let mut first = DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 1,
+    };
+    let second = DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 2,
+    };
+
+    assert!(first < second);
+    assert_ne!(first, second);
+    first.domain_event_cost = 3;
+    assert!(first > second);
 }
 
 #[test]

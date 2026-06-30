@@ -274,6 +274,31 @@ fn stale_scheduled_actor_is_skipped_before_the_next_valid_actor() {
 }
 
 #[test]
+fn drive_simulation_keeps_a_live_scheduled_actor_when_the_index_starts_stale() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    app.world_mut()
+        .insert_resource(rogue_core::actor::components::StableEntityIndex::default());
+    schedule_actor!(app, player, 0);
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+
+    drive_simulation(app.world_mut());
+
+    assert_eq!(
+        app.world().resource::<SimulationStatus>(),
+        &SimulationStatus::WaitingForPlayer
+    );
+    assert_eq!(app.world().resource::<CurrentActor>().0, None);
+    assert_eq!(
+        app.world()
+            .resource::<TurnClock>()
+            .peek_next()
+            .map(|entry| entry.actor.raw()),
+        Some(actor_id(app.world(), player).raw())
+    );
+}
+
+#[test]
 fn prequeued_player_action_keeps_the_simulation_resolving() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);

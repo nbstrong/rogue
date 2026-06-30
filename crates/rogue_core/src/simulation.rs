@@ -143,17 +143,13 @@ pub fn remove_dead_entities(
 
 pub fn prune_stale_timeline(
     mut clock: ResMut<'_, TurnClock>,
-    stable_index: Res<'_, StableEntityIndex>,
-    actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId)>,
+    actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId), With<Actor>>,
 ) {
     let mut retained = Vec::new();
     while let Some(entry) = clock.pop_next() {
-        let Some(entity) = stable_index.actor(entry.actor) else {
-            continue;
-        };
         if actors
-            .get(entity)
-            .is_ok_and(|(health, stable_id)| health.current > 0 && stable_id.0 == entry.actor)
+            .iter()
+            .any(|(health, stable_id)| health.current > 0 && stable_id.0 == entry.actor)
         {
             retained.push(Reverse(ScheduledActor {
                 next_tick: entry.next_tick,

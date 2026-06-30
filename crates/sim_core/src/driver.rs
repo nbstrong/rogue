@@ -42,12 +42,14 @@ impl<Id: Ord> Ord for DueWork<Id> {
             self.cadence.rank(),
             self.sequence,
             &self.id,
+            self.domain_event_cost,
         )
             .cmp(&(
                 other.due_minute,
                 other.cadence.rank(),
                 other.sequence,
                 &other.id,
+                other.domain_event_cost,
             ))
     }
 }
@@ -177,12 +179,15 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
                 break;
             }
 
-            if next.domain_event_cost > self.budget.remaining_domain_events(&self.progress) {
-                return Err(DriverError::WorkExceedsRemainingBudget {
+            if next.domain_event_cost > self.budget.maximum_domain_events_per_frame {
+                return Err(DriverError::WorkExceedsTotalBudget {
                     id: next.id,
-                    remaining_domain_events: self.budget.remaining_domain_events(&self.progress),
+                    total_domain_events: self.budget.maximum_domain_events_per_frame,
                     declared_cost: next.domain_event_cost,
                 });
+            }
+            if next.domain_event_cost > self.budget.remaining_domain_events(&self.progress) {
+                break;
             }
 
             let work = self.backlog.pop().expect("backlog peek/pop mismatch");
@@ -194,11 +199,10 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
             let produced = apply(&self.clock, work);
             self.progress.consume_step();
             if produced > work.domain_event_cost {
-                return Err(DriverError::WorkProducedMoreEventsThanDeclared {
-                    id: work.id,
-                    declared_cost: work.domain_event_cost,
-                    produced,
-                });
+                panic!(
+                    "work produced {} events but declared only {}",
+                    produced, work.domain_event_cost
+                );
             }
             self.progress
                 .consume_domain_events(work.domain_event_cost.max(1));
@@ -227,15 +231,10 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverError<Id> {
-    WorkExceedsRemainingBudget {
+    WorkExceedsTotalBudget {
         id: Id,
-        remaining_domain_events: usize,
+        total_domain_events: usize,
         declared_cost: usize,
-    },
-    WorkProducedMoreEventsThanDeclared {
-        id: Id,
-        declared_cost: usize,
-        produced: usize,
     },
 }
 
