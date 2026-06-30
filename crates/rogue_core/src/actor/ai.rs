@@ -30,6 +30,9 @@ pub fn generate_ai_action(
     let Some(current_actor_entity) = current_actor.0 else {
         return;
     };
+    if queue.contains_actor(current_actor_entity) {
+        return;
+    }
     let Some((player_entity, player_position)) = players.iter().next() else {
         return;
     };

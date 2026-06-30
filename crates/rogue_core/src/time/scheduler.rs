@@ -14,7 +14,7 @@ pub fn select_next_actor(
         return;
     }
 
-    if let Some(next) = clock.pop_next() {
+    while let Some(next) = clock.pop_next() {
         if actors
             .get(next.actor)
             .is_ok_and(|health| health.current > 0)
@@ -23,22 +23,6 @@ pub fn select_next_actor(
             current_actor.0 = Some(next.actor);
             *status = SimulationStatus::Resolving;
             return;
-        }
-
-        debug_assert!(
-            false,
-            "discarded stale scheduled actor that no longer exists or can not act"
-        );
-        while let Some(next) = clock.pop_next() {
-            if actors
-                .get(next.actor)
-                .is_ok_and(|health| health.current > 0)
-            {
-                clock.current_tick = next.next_tick;
-                current_actor.0 = Some(next.actor);
-                *status = SimulationStatus::Resolving;
-                return;
-            }
         }
     }
 }

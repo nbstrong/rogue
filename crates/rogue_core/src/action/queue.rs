@@ -12,11 +12,22 @@ pub struct ActionQueue {
 
 impl ActionQueue {
     pub fn push(&mut self, action: Action) {
+        if self
+            .actions
+            .iter()
+            .any(|pending| pending.actor == action.actor)
+        {
+            return;
+        }
         self.actions.push_back(action);
     }
 
     pub fn pop(&mut self) -> Option<Action> {
         self.actions.pop_front()
+    }
+
+    pub fn contains_actor(&self, actor: Entity) -> bool {
+        self.actions.iter().any(|action| action.actor == actor)
     }
 
     pub fn take_for_actor(&mut self, actor: Entity) -> Option<Action> {

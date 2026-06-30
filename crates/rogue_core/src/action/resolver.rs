@@ -1,4 +1,5 @@
 use bevy_ecs::prelude::*;
+use std::collections::VecDeque;
 
 use crate::action::intent::{Action, ActionKind, ActionTarget};
 use crate::action::queue::ActionQueue;
@@ -42,10 +43,8 @@ impl Default for ActionDecision {
     }
 }
 
-#[derive(Resource, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum ActionOutcome {
-    Idle,
-    WaitingForPlayer,
     Resolved(Action),
     Failed {
         action: Action,
@@ -53,9 +52,18 @@ pub enum ActionOutcome {
     },
 }
 
-impl Default for ActionOutcome {
-    fn default() -> Self {
-        Self::Idle
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ActionOutcomeLog {
+    pub outcomes: VecDeque<ActionOutcome>,
+}
+
+impl ActionOutcomeLog {
+    pub fn push(&mut self, outcome: ActionOutcome) {
+        self.outcomes.push_back(outcome);
+    }
+
+    pub fn latest(&self) -> Option<&ActionOutcome> {
+        self.outcomes.back()
     }
 }
 
@@ -202,7 +210,6 @@ pub fn validate_action(
     mut queue: ResMut<'_, ActionQueue>,
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
     mut decision: ResMut<'_, ActionDecision>,
-    mut outcome: ResMut<'_, ActionOutcome>,
     mut status: ResMut<'_, SimulationStatus>,
     map: Res<'_, LevelMap>,
     spatial: Res<'_, SpatialIndex>,
@@ -222,7 +229,6 @@ pub fn validate_action(
     >,
 ) {
     *decision = ActionDecision::Idle;
-    *outcome = ActionOutcome::Idle;
 
     let Some(current_actor) = current_actor else {
         return;
@@ -241,13 +247,6 @@ pub fn validate_action(
             },
             failure: ActionFailure::ActorUnavailable,
         };
-        *outcome = ActionOutcome::Failed {
-            action: Action {
-                actor: current_actor,
-                kind: ActionKind::Wait,
-            },
-            failure: ActionFailure::ActorUnavailable,
-        };
         return;
     };
 
@@ -255,7 +254,6 @@ pub fn validate_action(
         if current_is_player {
             *status = SimulationStatus::WaitingForPlayer;
             *decision = ActionDecision::WaitingForPlayer;
-            *outcome = ActionOutcome::WaitingForPlayer;
         } else {
             let action = Action {
                 actor: current_actor,
@@ -263,10 +261,6 @@ pub fn validate_action(
             };
             *decision = ActionDecision::Failed {
                 action: action.clone(),
-                failure: ActionFailure::ActorUnavailable,
-            };
-            *outcome = ActionOutcome::Failed {
-                action,
                 failure: ActionFailure::ActorUnavailable,
             };
         }
@@ -291,10 +285,6 @@ pub fn validate_action(
             action: action.clone(),
             failure,
         },
-    };
-    *outcome = match validation {
-        Ok(()) => ActionOutcome::Resolved(action),
-        Err(failure) => ActionOutcome::Failed { action, failure },
     };
 }
 
@@ -321,7 +311,7 @@ pub fn resolve_action(
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
     mut turn_clock: ResMut<'_, TurnClock>,
     mut decision: ResMut<'_, ActionDecision>,
-    mut outcome: ResMut<'_, ActionOutcome>,
+    mut outcomes: ResMut<'_, ActionOutcomeLog>,
 ) {
     let Some(current_actor) = current_actor else {
         return;
@@ -348,10 +338,13 @@ pub fn resolve_action(
     }
 
     let actor_speed = scheduled_speed(&speeds, action.actor);
+    let should_reschedule = !matches!(failure, Some(ActionFailure::ActorUnavailable));
 
     match action.kind.clone() {
         ActionKind::Wait => {
-            schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            if should_reschedule {
+                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            }
         }
         ActionKind::Move { delta } => {
             let Some((
@@ -364,6 +357,19 @@ pub fn resolve_action(
                 attacker_stats,
             )) = actor_flags(&positions, action.actor)
             else {
+                if should_reschedule {
+                    schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+                }
+                outcomes.push(match failure {
+                    Some(failure) => ActionOutcome::Failed {
+                        action: action.clone(),
+                        failure,
+                    },
+                    None => ActionOutcome::Failed {
+                        action: action.clone(),
+                        failure: ActionFailure::ActorUnavailable,
+                    },
+                });
                 return;
             };
 
@@ -374,53 +380,80 @@ pub fn resolve_action(
 
             if !map.in_bounds(destination.cell) {
                 schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
-                return;
-            }
-
-            match map.tile(destination.cell).map(|tile| tile.kind) {
-                Some(TileKind::Wall) | None => {
-                    schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
-                }
-                Some(TileKind::ClosedDoor) => {
-                    if let Some(tile) = map.tile_mut(destination.cell) {
-                        tile.kind = TileKind::OpenDoor;
+            } else {
+                match map.tile(destination.cell).map(|tile| tile.kind) {
+                    Some(TileKind::Wall) | None => {
+                        schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
                     }
-                    schedule_actor_with_base(&mut turn_clock, action.actor, 80, actor_speed);
-                }
-                Some(TileKind::Floor)
-                | Some(TileKind::OpenDoor)
-                | Some(TileKind::StairsDown)
-                | Some(TileKind::StairsUp) => {
-                    if let Some(target) = find_valid_move_collision(
-                        action.actor,
-                        destination,
-                        attacker_is_player,
-                        attacker_is_hostile_to_player,
-                        &positions,
-                        &spatial,
-                    ) {
-                        if let Some((_, target_position, _, _, _, _, _, target_stats)) =
-                            positions.get(target).ok()
-                        {
-                            if let (Some(attacker_stats), Some(target_stats)) =
-                                (attacker_stats, target_stats.copied())
+                    Some(TileKind::ClosedDoor) => {
+                        if let Some(tile) = map.tile_mut(destination.cell) {
+                            tile.kind = TileKind::OpenDoor;
+                        }
+                        schedule_actor_with_base(&mut turn_clock, action.actor, 80, actor_speed);
+                    }
+                    Some(TileKind::Floor)
+                    | Some(TileKind::OpenDoor)
+                    | Some(TileKind::StairsDown)
+                    | Some(TileKind::StairsUp) => {
+                        if let Some(target) = find_valid_move_collision(
+                            action.actor,
+                            destination,
+                            attacker_is_player,
+                            attacker_is_hostile_to_player,
+                            &positions,
+                            &spatial,
+                        ) {
+                            if let Some((_, target_position, _, _, _, _, _, target_stats)) =
+                                positions.get(target).ok()
                             {
-                                effects.0.push_back(Effect::Damage {
-                                    source: Some(action.actor),
-                                    target,
-                                    amount: melee_damage(attacker_stats, target_stats),
-                                    kind: DamageKind::Melee,
-                                });
-                            }
+                                if let (Some(attacker_stats), Some(target_stats)) =
+                                    (attacker_stats, target_stats.copied())
+                                {
+                                    effects.0.push_back(Effect::Damage {
+                                        source: Some(action.actor),
+                                        target,
+                                        amount: melee_damage(attacker_stats, target_stats),
+                                        kind: DamageKind::Melee,
+                                    });
+                                }
 
-                            debug_assert_eq!(
-                                target_position.level, actor_position.level,
-                                "movement collision target must share the actor level"
-                            );
+                                debug_assert_eq!(
+                                    target_position.level, actor_position.level,
+                                    "movement collision target must share the actor level"
+                                );
+                                schedule_actor(
+                                    &mut turn_clock,
+                                    action.actor,
+                                    &ActionKind::Melee { target },
+                                    actor_speed,
+                                );
+                            } else {
+                                schedule_actor(
+                                    &mut turn_clock,
+                                    action.actor,
+                                    &action.kind,
+                                    actor_speed,
+                                );
+                            }
+                        } else if spatial
+                            .occupants_at(actor_position.level, destination.cell)
+                            .all(|occupant| {
+                                positions.get(occupant).map_or(
+                                    true,
+                                    |(_, _, _, _, _, blocks_movement, _, _)| {
+                                        blocks_movement.is_none()
+                                    },
+                                )
+                            })
+                        {
+                            commands.entity(action.actor).insert(GridPosition {
+                                level: actor_position.level,
+                                cell: destination.cell,
+                            });
                             schedule_actor(
                                 &mut turn_clock,
                                 action.actor,
-                                &ActionKind::Melee { target },
+                                &action.kind,
                                 actor_speed,
                             );
                         } else {
@@ -431,23 +464,6 @@ pub fn resolve_action(
                                 actor_speed,
                             );
                         }
-                    } else if spatial
-                        .occupants_at(actor_position.level, destination.cell)
-                        .all(|occupant| {
-                            positions
-                                .get(occupant)
-                                .map_or(true, |(_, _, _, _, _, blocks_movement, _, _)| {
-                                    blocks_movement.is_none()
-                                })
-                        })
-                    {
-                        commands.entity(action.actor).insert(GridPosition {
-                            level: actor_position.level,
-                            cell: destination.cell,
-                        });
-                        schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
-                    } else {
-                        schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
                     }
                 }
             }
@@ -463,6 +479,19 @@ pub fn resolve_action(
                 attacker_stats,
             )) = actor_flags(&positions, action.actor)
             else {
+                if should_reschedule {
+                    schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+                }
+                outcomes.push(match failure {
+                    Some(failure) => ActionOutcome::Failed {
+                        action: action.clone(),
+                        failure,
+                    },
+                    None => ActionOutcome::Failed {
+                        action: action.clone(),
+                        failure: ActionFailure::ActorUnavailable,
+                    },
+                });
                 return;
             };
             let Some((
@@ -475,7 +504,19 @@ pub fn resolve_action(
                 target_stats,
             )) = target_flags(&positions, target)
             else {
-                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+                if should_reschedule {
+                    schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+                }
+                outcomes.push(match failure {
+                    Some(failure) => ActionOutcome::Failed {
+                        action: action.clone(),
+                        failure,
+                    },
+                    None => ActionOutcome::Failed {
+                        action: action.clone(),
+                        failure: ActionFailure::ActorUnavailable,
+                    },
+                });
                 return;
             };
 
@@ -508,23 +549,25 @@ pub fn resolve_action(
                 }
             }
 
-            let _ = failure;
-            schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            if should_reschedule {
+                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            }
         }
         ActionKind::PickUp { .. }
         | ActionKind::Drop { .. }
         | ActionKind::UseItem { .. }
         | ActionKind::Descend
         | ActionKind::Ascend => {
-            let _ = failure;
-            schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            if should_reschedule {
+                schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+            }
         }
     }
 
-    *outcome = match failure {
+    outcomes.push(match failure {
         Some(failure) => ActionOutcome::Failed { action, failure },
         None => ActionOutcome::Resolved(action),
-    };
+    });
 }
 
 fn target_flags(
