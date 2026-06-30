@@ -1,8 +1,13 @@
+use bevy_app::{App, Update};
+use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::actor::components::Vision;
+use rogue_core::actor::components::{BlocksSight, Player};
+use rogue_core::simulation::SimulationPlugin;
 use rogue_core::world::fov::recalculate_fov_for_player;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
+use rogue_core::world::spatial::update_spatial_index;
 use rogue_core::world::tile::TileKind;
 
 fn recalculate(
@@ -105,4 +110,83 @@ fn sight_blockers_on_other_levels_do_not_occlude_the_active_level() {
     recalculate(&mut map, &spatial, active_level, player_cell, 5);
 
     assert!(map.tile(beyond_cell).unwrap().visible);
+}
+
+#[test]
+fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        Update,
+        (
+            update_spatial_index,
+            rogue_core::world::fov::recalculate_fov,
+        )
+            .chain(),
+    );
+
+    let level = LevelId(0);
+    let player_cell = IVec2::new(2, 3);
+    let blocker_cell = IVec2::new(3, 3);
+    let hidden_cell = IVec2::new(4, 3);
+    let level_map = LevelMap::new(7, 7, TileKind::Floor);
+
+    let player = app
+        .world_mut()
+        .spawn((
+            Player,
+            Vision { range: 5 },
+            GridPosition {
+                level,
+                cell: player_cell,
+            },
+        ))
+        .id();
+    let blocker = app
+        .world_mut()
+        .spawn((
+            BlocksSight,
+            GridPosition {
+                level,
+                cell: blocker_cell,
+            },
+        ))
+        .id();
+
+    app.world_mut().insert_resource(level_map);
+    app.world_mut().insert_resource(SpatialIndex::default());
+
+    app.update();
+
+    assert!(
+        !app.world()
+            .resource::<LevelMap>()
+            .tile(hidden_cell)
+            .unwrap()
+            .visible
+    );
+    assert_eq!(
+        app.world().resource::<SpatialIndex>().sight_blockers.len(),
+        1
+    );
+
+    app.world_mut().entity_mut(blocker).insert(GridPosition {
+        level,
+        cell: IVec2::new(6, 6),
+    });
+
+    app.update();
+
+    assert!(
+        app.world()
+            .resource::<LevelMap>()
+            .tile(hidden_cell)
+            .unwrap()
+            .visible
+    );
+    assert_eq!(
+        app.world().resource::<SpatialIndex>().sight_blockers.len(),
+        1
+    );
+    assert!(app.world().entity(player).contains::<Player>());
 }

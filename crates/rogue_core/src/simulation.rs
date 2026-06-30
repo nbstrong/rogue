@@ -74,8 +74,9 @@ impl Plugin for SimulationPlugin {
                     resolve_action.in_set(SimulationSet::Resolve),
                     apply_pending_effects.in_set(SimulationSet::ApplyEffects),
                     remove_dead_entities.in_set(SimulationSet::HandleDeath),
-                    update_spatial_index.in_set(SimulationSet::RebuildDerivedData),
-                    recalculate_fov.in_set(SimulationSet::RebuildDerivedData),
+                    (update_spatial_index, recalculate_fov)
+                        .chain()
+                        .in_set(SimulationSet::RebuildDerivedData),
                     finish_simulation_step.in_set(SimulationSet::FinishStep),
                 ),
             );
