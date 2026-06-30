@@ -15,8 +15,9 @@ use rogue_core::item::components::{Inventory, Item};
 use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
-    ActionKindSnapshot, GameSnapshot, SavedInventory, snapshot_digest, snapshot_from_text,
-    snapshot_to_text, snapshot_world,
+    ActionKindSnapshot, AiGoalSnapshot, GameSnapshot, SavedInventory, SavedLastKnownPlayerPosition,
+    SavedPosition, ScheduledActorSnapshot, SimulationStatusSnapshot, snapshot_digest,
+    snapshot_from_text, snapshot_to_text, snapshot_world,
 };
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::time::clock::{CurrentActor, TurnClock};
@@ -544,9 +545,115 @@ fn malformed_snapshots_are_rejected() {
     cases.push(("mid-step current actor", mid_step, "stable save boundary"));
 
     let mut resolving = base.clone();
-    resolving.simulation_status =
-        rogue_core::persistence::snapshot::SimulationStatusSnapshot::Resolving;
+    resolving.simulation_status = SimulationStatusSnapshot::Resolving;
     cases.push(("resolving status", resolving, "stable save boundary"));
+
+    let mut duplicate_ids = base.clone();
+    duplicate_ids
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == monster_id)
+        .expect("monster entity")
+        .id = player_id;
+    cases.push((
+        "duplicate persistent id",
+        duplicate_ids,
+        "duplicate persistent id",
+    ));
+
+    let mut invalid_allocator = base.clone();
+    invalid_allocator.persistent_ids.next_available = player_id;
+    cases.push((
+        "invalid allocator",
+        invalid_allocator,
+        "must exceed max entity id",
+    ));
+
+    let mut duplicate_levels = base.clone();
+    duplicate_levels
+        .levels
+        .push(duplicate_levels.levels[0].clone());
+    cases.push(("duplicate levels", duplicate_levels, "duplicate level ids"));
+
+    let mut dangling_reference = base.clone();
+    dangling_reference
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == monster_id)
+        .expect("monster entity")
+        .ai_goal = Some(AiGoalSnapshot::Chase(999_999));
+    cases.push(("dangling reference", dangling_reference, "missing entity"));
+
+    let mut invalid_timeline = base.clone();
+    invalid_timeline.timeline.push(ScheduledActorSnapshot {
+        next_tick: invalid_timeline.current_tick,
+        sequence: 0,
+        actor: player_id,
+    });
+    invalid_timeline.next_sequence = 0;
+    cases.push((
+        "invalid timeline sequence",
+        invalid_timeline,
+        "next_sequence",
+    ));
+
+    let mut zero_dimensions = base.clone();
+    zero_dimensions.levels[0].width = 0;
+    zero_dimensions.levels[0].height = 0;
+    zero_dimensions.levels[0].tiles.clear();
+    cases.push(("zero dimensions", zero_dimensions, "zero dimensions"));
+
+    let mut invalid_position = base.clone();
+    invalid_position
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == player_id)
+        .expect("player entity")
+        .position = Some(SavedPosition {
+        level: 0,
+        x: 999,
+        y: 0,
+    });
+    cases.push((
+        "out of bounds position",
+        invalid_position,
+        "out-of-bounds position",
+    ));
+
+    let mut invalid_investigate = base.clone();
+    invalid_investigate
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == monster_id)
+        .expect("monster entity")
+        .ai_goal = Some(AiGoalSnapshot::Investigate(SavedPosition {
+        level: 0,
+        x: 999,
+        y: 999,
+    }));
+    cases.push((
+        "out of bounds investigate",
+        invalid_investigate,
+        "out-of-bounds position",
+    ));
+
+    let mut invalid_last_known = base.clone();
+    invalid_last_known
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == monster_id)
+        .expect("monster entity")
+        .last_known_player_position = Some(SavedLastKnownPlayerPosition {
+        level: 0,
+        x: 999,
+        y: 999,
+        observed_at: 1,
+    });
+    cases.push((
+        "out of bounds last known",
+        invalid_last_known,
+        "out-of-bounds position",
+    ));
 
     let mut non_item = base.clone();
     non_item

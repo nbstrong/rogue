@@ -33,9 +33,7 @@ pub fn bootstrap_save_system(world: &mut World) {
 }
 
 fn create_unique_temp_file(path: &Path) -> Result<(PathBuf, fs::File), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "save path does not have a parent directory".to_string())?;
+    let parent = normalized_parent(path);
     let file_name = path
         .file_name()
         .ok_or_else(|| "save path does not have a file name".to_string())?
@@ -70,9 +68,7 @@ fn save_world_to_path_impl(
 ) -> Result<(), String> {
     let snapshot = snapshot_world(world)?;
     let text = snapshot_to_text(&snapshot)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
+    fs::create_dir_all(normalized_parent(path)).map_err(|err| err.to_string())?;
 
     let (temp_path, mut temp_file) = create_unique_temp_file(path)?;
     let write_result = temp_file
@@ -91,9 +87,7 @@ fn save_world_to_path_impl(
         return Err(err.to_string());
     }
 
-    if let Some(parent) = path.parent() {
-        sync_parent_directory(parent)?;
-    }
+    sync_parent_directory(&normalized_parent(path))?;
     Ok(())
 }
 
@@ -112,6 +106,13 @@ fn sync_parent_directory(parent: &Path) -> Result<(), String> {
     {
         let _ = parent;
         Ok(())
+    }
+}
+
+fn normalized_parent(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
     }
 }
 
@@ -282,5 +283,42 @@ mod tests {
             "original save"
         );
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bare_relative_filename_saves_and_loads() {
+        let original_dir = std::env::current_dir().expect("current dir");
+        let temp_dir = std::env::temp_dir().join(format!(
+            "rogue-save-bare-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir");
+        std::env::set_current_dir(&temp_dir).expect("enter temp dir");
+
+        let world = build_world();
+        let save_name = PathBuf::from("bare-save.ron");
+        save_world_to_path(&world, &save_name).expect("save bare filename");
+
+        let mut loaded = World::new();
+        loaded.insert_resource(generate_one_room(5, 5));
+        loaded.insert_resource(SpatialIndex::default());
+        loaded.insert_resource(RandomStreams::seeded(0));
+        loaded.insert_resource(PersistentIdAllocator::default());
+        loaded.insert_resource(ActionQueue::default());
+        loaded.insert_resource(EffectQueue::default());
+        loaded.insert_resource(ActionDecision::default());
+        loaded.insert_resource(CurrentActor::default());
+        loaded.insert_resource(TurnClock::default());
+        loaded.insert_resource(SimulationStatus::WaitingForPlayer);
+
+        load_world_from_path(&mut loaded, &save_name).expect("load bare filename");
+
+        std::env::set_current_dir(&original_dir).expect("restore dir");
+        let _ = fs::remove_file(temp_dir.join("bare-save.ron"));
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

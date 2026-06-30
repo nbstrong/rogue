@@ -660,7 +660,13 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     }
 
     for level in &snapshot.levels {
-        if level.tiles.len() != level.width as usize * level.height as usize {
+        if level.width == 0 || level.height == 0 {
+            return Err(format!("level {} has zero dimensions", level.id));
+        }
+        let expected_tiles = u64::from(level.width)
+            .checked_mul(u64::from(level.height))
+            .ok_or_else(|| format!("level {} dimensions overflow", level.id))?;
+        if expected_tiles != level.tiles.len() as u64 {
             return Err(format!(
                 "level {} tile count does not match dimensions",
                 level.id
@@ -690,6 +696,17 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
                     entity.id, position.level
                 ));
             }
+            let level = snapshot
+                .levels
+                .iter()
+                .find(|level| level.id == position.level)
+                .ok_or_else(|| {
+                    format!(
+                        "entity {} references unknown level {}",
+                        entity.id, position.level
+                    )
+                })?;
+            position_within_level(position, level, entity.id, "position")?;
         }
 
         if let Some(inventory) = &entity.inventory {
@@ -769,18 +786,40 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
                             entity.id, position.level
                         ));
                     }
+                    let level = snapshot
+                        .levels
+                        .iter()
+                        .find(|level| level.id == position.level)
+                        .ok_or_else(|| {
+                            format!(
+                                "entity {} ai goal references missing level {}",
+                                entity.id, position.level
+                            )
+                        })?;
+                    position_within_level(position, level, entity.id, "ai goal")?;
                 }
                 AiGoalSnapshot::Idle | AiGoalSnapshot::Wander => {}
             }
         }
 
-        if let Some(position) = &entity.last_known_player_position
-            && !level_ids.contains(&position.level)
-        {
-            return Err(format!(
-                "entity {} last-known position references missing level {}",
-                entity.id, position.level
-            ));
+        if let Some(position) = &entity.last_known_player_position {
+            if !level_ids.contains(&position.level) {
+                return Err(format!(
+                    "entity {} last-known position references missing level {}",
+                    entity.id, position.level
+                ));
+            }
+            let level = snapshot
+                .levels
+                .iter()
+                .find(|level| level.id == position.level)
+                .ok_or_else(|| {
+                    format!(
+                        "entity {} last-known position references missing level {}",
+                        entity.id, position.level
+                    )
+                })?;
+            last_known_position_within_level(position, level, entity.id)?;
         }
 
         for status in &entity.active_statuses {
@@ -945,6 +984,55 @@ fn validate_effect_references(
 fn validate_restore_support(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     if snapshot.levels.len() != 1 {
         return Err("restore currently supports exactly one level".to_string());
+    }
+
+    Ok(())
+}
+
+fn position_within_level(
+    position: &SavedPosition,
+    level: &LevelSnapshot,
+    entity_id: u64,
+    context: &str,
+) -> SnapshotResult<()> {
+    if position.x < 0 || position.y < 0 {
+        return Err(format!(
+            "entity {} {} references negative coordinates",
+            entity_id, context
+        ));
+    }
+
+    let x = position.x as u32;
+    let y = position.y as u32;
+    if x >= level.width || y >= level.height {
+        return Err(format!(
+            "entity {} {} references out-of-bounds position",
+            entity_id, context
+        ));
+    }
+
+    Ok(())
+}
+
+fn last_known_position_within_level(
+    position: &SavedLastKnownPlayerPosition,
+    level: &LevelSnapshot,
+    entity_id: u64,
+) -> SnapshotResult<()> {
+    if position.x < 0 || position.y < 0 {
+        return Err(format!(
+            "entity {} last-known position references negative coordinates",
+            entity_id
+        ));
+    }
+
+    let x = position.x as u32;
+    let y = position.y as u32;
+    if x >= level.width || y >= level.height {
+        return Err(format!(
+            "entity {} last-known position references out-of-bounds position",
+            entity_id
+        ));
     }
 
     Ok(())
