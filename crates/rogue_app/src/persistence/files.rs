@@ -1,5 +1,6 @@
 use std::fs;
 use std::fs::OpenOptions;
+use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -74,25 +75,86 @@ fn save_world_to_path_impl(
     }
 
     let (temp_path, mut temp_file) = create_unique_temp_file(path)?;
-    temp_file
+    let write_result = temp_file
         .write_all(text.as_bytes())
         .and_then(|_| temp_file.flush())
-        .and_then(|_| temp_file.sync_all())
-        .map_err(|err| err.to_string())?;
+        .and_then(|_| temp_file.sync_all());
     drop(temp_file);
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err.to_string());
+    }
 
     let commit_result = commit(&temp_path, path);
     if let Err(err) = commit_result {
         let _ = fs::remove_file(&temp_path);
         return Err(err.to_string());
     }
+
+    if let Some(parent) = path.parent() {
+        sync_parent_directory(parent)?;
+    }
     Ok(())
 }
 
 pub fn save_world_to_path(world: &World, path: impl AsRef<Path>) -> Result<(), String> {
-    save_world_to_path_impl(world, path.as_ref(), |temp, destination| {
-        fs::rename(temp, destination)
-    })
+    save_world_to_path_impl(world, path.as_ref(), replace_file_atomic)
+}
+
+fn sync_parent_directory(parent: &Path) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = fs::File::open(parent).map_err(|err| err.to_string())?;
+        dir.sync_all().map_err(|err| err.to_string())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = parent;
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file_atomic(temp: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(temp, destination)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file_atomic(temp: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(
+            lpExistingFileName: *const u16,
+            lpNewFileName: *const u16,
+            dwFlags: u32,
+        ) -> i32;
+    }
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    let temp_wide: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let ok = unsafe {
+        MoveFileExW(
+            temp_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 pub fn load_world_from_path(world: &mut World, path: impl AsRef<Path>) -> Result<(), String> {
@@ -136,10 +198,16 @@ mod tests {
     use super::*;
     use bevy_ecs::prelude::World;
     use bevy_math::IVec2;
+    use rogue_core::action::queue::ActionQueue;
+    use rogue_core::action::resolver::ActionDecision;
     use rogue_core::actor::components::{
         ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, PersistentId,
         PersistentIdAllocator, Player, PrototypeId, Vision,
     };
+    use rogue_core::item::effects::EffectQueue;
+    use rogue_core::persistence::rng::RandomStreams;
+    use rogue_core::simulation::SimulationStatus;
+    use rogue_core::time::clock::{CurrentActor, TurnClock};
     use rogue_core::world::generation::generate_one_room;
     use rogue_core::world::map::{GridPosition, LevelId};
     use rogue_core::world::spatial::SpatialIndex;
@@ -148,7 +216,16 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(generate_one_room(5, 5));
         world.insert_resource(SpatialIndex::default());
-        world.insert_resource(PersistentIdAllocator::default());
+        world.insert_resource(RandomStreams::seeded(0));
+        let mut allocator = PersistentIdAllocator::default();
+        allocator.set_next_available(2);
+        world.insert_resource(allocator);
+        world.insert_resource(ActionQueue::default());
+        world.insert_resource(EffectQueue::default());
+        world.insert_resource(ActionDecision::default());
+        world.insert_resource(CurrentActor::default());
+        world.insert_resource(TurnClock::default());
+        world.insert_resource(SimulationStatus::WaitingForPlayer);
         let player = world
             .spawn((
                 Actor,
@@ -193,10 +270,13 @@ mod tests {
         ));
         fs::write(&path, "original save").expect("seed file");
 
+        let mut commit_called = false;
         let result = save_world_to_path_impl(&world, &path, |_temp, _destination| {
+            commit_called = true;
             Err(std::io::Error::other("commit failure"))
         });
         assert!(result.is_err());
+        assert!(commit_called);
         assert_eq!(
             fs::read_to_string(&path).expect("save file"),
             "original save"

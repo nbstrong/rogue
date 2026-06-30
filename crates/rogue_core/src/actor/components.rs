@@ -1,6 +1,7 @@
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 
+use crate::actor::combat::StatusEffect;
 use crate::world::map::{GridPosition, LevelId};
 #[derive(Component)]
 pub struct Actor;
@@ -44,6 +45,9 @@ pub struct PrototypeId(pub String);
 
 #[derive(Component)]
 pub struct HostileToPlayer;
+
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveStatuses(pub Vec<StatusEffect>);
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct LastKnownPlayerPosition {

@@ -375,6 +375,14 @@ pub fn resolve_action(
     let actor_speed = scheduled_speed(&speeds, action.actor);
     let should_reschedule = !matches!(failure, Some(ActionFailure::ActorUnavailable));
 
+    if let Some(failure) = failure {
+        if should_reschedule {
+            schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
+        }
+        outcomes.push(ActionOutcome::Failed { action, failure });
+        return;
+    }
+
     match action.kind.clone() {
         ActionKind::Wait => {
             if should_reschedule {

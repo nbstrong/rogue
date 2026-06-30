@@ -8,8 +8,8 @@ use crate::action::intent::{Action, ActionKind, ActionTarget};
 use crate::action::queue::ActionQueue;
 use crate::actor::combat::{DamageKind, StatusEffect};
 use crate::actor::components::{
-    ActionSpeed, Actor, AiGoal, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer,
-    Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, AiGoal, BlocksMovement, BlocksSight, CombatStats, Health,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
@@ -217,6 +217,8 @@ pub struct EntitySnapshot {
     pub carried_by: Option<u64>,
     pub ai_goal: Option<AiGoalSnapshot>,
     pub last_known_player_position: Option<SavedLastKnownPlayerPosition>,
+    #[serde(default)]
+    pub active_statuses: Vec<StatusEffect>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -565,6 +567,10 @@ fn build_entity_snapshot(
             y: position.cell.y,
             observed_at: position.observed_at,
         });
+    let active_statuses = entity_ref
+        .get::<ActiveStatuses>()
+        .map(|statuses| statuses.0.clone())
+        .unwrap_or_default();
 
     Ok(EntitySnapshot {
         id,
@@ -585,10 +591,15 @@ fn build_entity_snapshot(
         carried_by,
         ai_goal,
         last_known_player_position,
+        active_statuses,
     })
 }
 
 fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
+    if snapshot.root_seed != snapshot.rng.seed {
+        return Err("snapshot root seed must match rng seed".to_string());
+    }
+
     let mut ids = HashSet::new();
     for entity in &snapshot.entities {
         if entity.id == 0 {
@@ -706,6 +717,19 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
                 "entity {} last-known position references missing level {}",
                 entity.id, position.level
             ));
+        }
+
+        for status in &entity.active_statuses {
+            match status {
+                StatusEffect::Poisoned { remaining } | StatusEffect::Stunned { remaining } => {
+                    if *remaining == 0 {
+                        return Err(format!(
+                            "entity {} contains a zero-duration status",
+                            entity.id
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -843,22 +867,33 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     let rng = world
         .get_resource::<RandomStreams>()
         .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| "missing random streams resource".to_string())?;
     let allocator = world
         .get_resource::<PersistentIdAllocator>()
         .map(|allocator| PersistentIdAllocatorSnapshot {
             next_available: allocator.next_available(),
         })
-        .unwrap_or_else(|| {
-            let max_id = world
-                .iter_entities()
-                .filter_map(|entity| entity.get::<PersistentId>().map(|id| id.0))
-                .max()
-                .unwrap_or(0);
-            PersistentIdAllocatorSnapshot {
-                next_available: max_id.saturating_add(1).max(1),
-            }
-        });
+        .ok_or_else(|| "missing persistent id allocator resource".to_string())?;
+    let clock = world
+        .get_resource::<TurnClock>()
+        .ok_or_else(|| "missing turn clock resource".to_string())?;
+    let current_actor = world
+        .get_resource::<CurrentActor>()
+        .ok_or_else(|| "missing current actor resource".to_string())?
+        .0;
+    let action_queue = world
+        .get_resource::<ActionQueue>()
+        .ok_or_else(|| "missing action queue resource".to_string())?;
+    let effect_queue = world
+        .get_resource::<EffectQueue>()
+        .ok_or_else(|| "missing effect queue resource".to_string())?;
+    let decision = world
+        .get_resource::<crate::action::resolver::ActionDecision>()
+        .ok_or_else(|| "missing action decision resource".to_string())?;
+    let simulation_status = world
+        .get_resource::<SimulationStatus>()
+        .copied()
+        .ok_or_else(|| "missing simulation status resource".to_string())?;
 
     let mut ids = HashMap::new();
     for entity in world.iter_entities() {
@@ -908,61 +943,52 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     }
     entities.sort_by_key(|entity| entity.id);
 
+    let current_actor = current_actor.map(|actor| pid_of(actor, &ids)).transpose()?;
+
     let mut timeline = Vec::new();
-    if let Some(clock) = world.get_resource::<TurnClock>() {
-        for entry in clock.timeline.iter() {
-            timeline.push(ScheduledActorSnapshot {
-                next_tick: entry.0.next_tick,
-                sequence: entry.0.sequence,
-                actor: pid_of(entry.0.actor, &ids)?,
-            });
-        }
+    for entry in clock.timeline.iter() {
+        timeline.push(ScheduledActorSnapshot {
+            next_tick: entry.0.next_tick,
+            sequence: entry.0.sequence,
+            actor: pid_of(entry.0.actor, &ids)?,
+        });
     }
     timeline.sort_by_key(|entry| (entry.next_tick, entry.sequence, entry.actor));
 
     let mut pending_actions = Vec::new();
-    if let Some(queue) = world.get_resource::<ActionQueue>() {
-        for action in &queue.actions {
-            pending_actions.push(ActionSnapshot {
-                actor: pid_of(action.actor, &ids)?,
-                kind: action_kind_to_snapshot(&action.kind, &ids)?,
-            });
-        }
+    for action in &action_queue.actions {
+        pending_actions.push(ActionSnapshot {
+            actor: pid_of(action.actor, &ids)?,
+            kind: action_kind_to_snapshot(&action.kind, &ids)?,
+        });
     }
 
     let mut pending_effects = Vec::new();
-    if let Some(queue) = world.get_resource::<EffectQueue>() {
-        for effect in &queue.0 {
-            pending_effects.push(effect_to_snapshot(effect, &ids)?);
-        }
+    for effect in &effect_queue.0 {
+        pending_effects.push(effect_to_snapshot(effect, &ids)?);
     }
 
-    let current_actor = world
-        .get_resource::<CurrentActor>()
-        .and_then(|actor| actor.0)
-        .map(|actor| pid_of(actor, &ids))
-        .transpose()?;
+    if !matches!(*decision, crate::action::resolver::ActionDecision::Idle) {
+        return Err("snapshot requires an idle action decision".to_string());
+    }
+    if current_actor.is_some()
+        || !action_queue.actions.is_empty()
+        || !effect_queue.0.is_empty()
+        || simulation_status != SimulationStatus::WaitingForPlayer
+            && simulation_status != SimulationStatus::GameOver
+    {
+        return Err("snapshot requires a stable save boundary".to_string());
+    }
 
-    let simulation_status = SimulationStatusSnapshot::from(
-        world
-            .get_resource::<SimulationStatus>()
-            .copied()
-            .unwrap_or_default(),
-    );
+    let simulation_status = SimulationStatusSnapshot::from(simulation_status);
 
     let levels = vec![build_level_snapshot(map)];
     validate_snapshot_shape(&GameSnapshot {
         version: super::migration::CURRENT_SAVE_VERSION,
         root_seed: rng.seed,
         current_level: levels[0].id,
-        current_tick: world
-            .get_resource::<TurnClock>()
-            .map(|clock| clock.current_tick)
-            .unwrap_or_default(),
-        next_sequence: world
-            .get_resource::<TurnClock>()
-            .map(|clock| clock.next_sequence)
-            .unwrap_or_default(),
+        current_tick: clock.current_tick,
+        next_sequence: clock.next_sequence,
         current_actor,
         simulation_status: simulation_status.clone(),
         persistent_ids: allocator.clone(),
@@ -978,14 +1004,8 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         version: super::migration::CURRENT_SAVE_VERSION,
         root_seed: rng.seed,
         current_level: levels[0].id,
-        current_tick: world
-            .get_resource::<TurnClock>()
-            .map(|clock| clock.current_tick)
-            .unwrap_or_default(),
-        next_sequence: world
-            .get_resource::<TurnClock>()
-            .map(|clock| clock.next_sequence)
-            .unwrap_or_default(),
+        current_tick: clock.current_tick,
+        next_sequence: clock.next_sequence,
         current_actor,
         simulation_status,
         persistent_ids: allocator,
@@ -1083,6 +1103,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
     world.insert_resource(allocator);
     world.insert_resource(ActionQueue::default());
     world.insert_resource(EffectQueue::default());
+    world.insert_resource(crate::action::resolver::ActionDecision::default());
+    world.insert_resource(crate::action::resolver::ActionOutcomeLog::default());
     world.insert_resource(TurnClock {
         current_tick: snapshot.current_tick,
         next_sequence: snapshot.next_sequence,
@@ -1185,6 +1207,9 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
                 cell: IVec2::new(position.x, position.y),
                 observed_at: position.observed_at,
             });
+        }
+        if !entity.active_statuses.is_empty() {
+            entity_mut.insert(ActiveStatuses(entity.active_statuses.clone()));
         }
     }
 

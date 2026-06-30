@@ -335,6 +335,101 @@ fn save_and_load_round_trip_preserves_the_snapshot_digest() {
 }
 
 #[test]
+fn presentation_only_mutations_do_not_change_the_snapshot_digest() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    let before_digest = snapshot_digest(&before).expect("before digest");
+
+    if let Some(mut views) = app
+        .world_mut()
+        .get_resource_mut::<rogue_app::game::MapViews>()
+    {
+        views.tiles.clear();
+    }
+    if let Some(mut actor_views) = app
+        .world_mut()
+        .get_resource_mut::<rogue_app::game::ActorViews>()
+    {
+        actor_views.views.clear();
+    }
+    if let Some(mut log) = app
+        .world_mut()
+        .get_resource_mut::<rogue_app::game::CombatLog>()
+    {
+        log.lines.push_back("presentation only".to_string());
+    }
+    if let Some(mut health) = app
+        .world_mut()
+        .get_resource_mut::<rogue_app::game::HealthSnapshot>()
+    {
+        health.values.clear();
+    }
+
+    let after = snapshot_world(app.world()).expect("after snapshot");
+    let after_digest = snapshot_digest(&after).expect("after digest");
+
+    assert_eq!(before, after);
+    assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn saving_twice_overwrites_the_existing_file_and_loads_the_new_state() {
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "rogue-save-overwrite-{}-{}.ron",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    let mut saved_app = build_app();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+
+    save_world_to_path(saved_app.world(), &save_path).expect("first save");
+    let first_snapshot = snapshot_world(saved_app.world()).expect("first snapshot");
+
+    let player = {
+        let world = saved_app.world_mut();
+        world
+            .query_filtered::<Entity, With<Player>>()
+            .iter(world)
+            .next()
+            .expect("player entity")
+    };
+    saved_app.world_mut().entity_mut(player).insert(Health {
+        current: 6,
+        maximum: 10,
+    });
+
+    let second_snapshot = snapshot_world(saved_app.world()).expect("second snapshot");
+    assert_ne!(first_snapshot, second_snapshot);
+    save_world_to_path(saved_app.world(), &save_path).expect("second save");
+
+    let mut loaded_app = build_app();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    load_world_from_path(loaded_app.world_mut(), &save_path).expect("load file");
+
+    let loaded_snapshot = snapshot_world(loaded_app.world()).expect("loaded snapshot");
+    assert_eq!(second_snapshot, loaded_snapshot);
+
+    let _ = std::fs::remove_file(save_path);
+}
+
+#[test]
 fn loaded_durable_entities_do_not_leak_across_restart() {
     let mut save_path = std::env::temp_dir();
     save_path.push(format!(

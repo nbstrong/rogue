@@ -1,5 +1,6 @@
 use bevy_app::App;
 use bevy_ecs::prelude::*;
+use bevy_ecs::system::RunSystemOnce;
 use bevy_math::IVec2;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -7,14 +8,15 @@ use std::collections::HashMap;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::components::{
-    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer,
+    ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, HostileToPlayer, Monster,
     PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
 };
 use rogue_core::item::components::{Inventory, Item};
 use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
-    ActionKindSnapshot, GameSnapshot, snapshot_digest, snapshot_from_text, snapshot_world,
+    ActionKindSnapshot, GameSnapshot, snapshot_digest, snapshot_from_text, snapshot_to_text,
+    snapshot_world,
 };
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::time::clock::{CurrentActor, TurnClock};
@@ -198,6 +200,7 @@ fn initialize_world(app: &mut App, seed: u64) {
     let monster = {
         let entity = app.world_mut().spawn((
             Actor,
+            Monster,
             HostileToPlayer,
             BlocksMovement,
             BlocksSight,
@@ -285,26 +288,41 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, fixture.seed);
 
+    let monster = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<Monster>>();
+        query.iter(world).next().expect("monster entity")
+    };
+    app.world_mut()
+        .resource_mut::<ActionQueue>()
+        .actions
+        .clear();
+    *app.world_mut().resource_mut::<CurrentActor>() = CurrentActor(Some(monster));
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+    app.world_mut()
+        .run_system_once(rogue_core::actor::ai::generate_ai_action)
+        .expect("run ai system");
+    rogue_core::drive_simulation(app.world_mut());
+
     for command in &fixture.commands {
         drive_command(&mut app, command);
     }
 
-    let monster = {
-        let world = app.world_mut();
-        let mut query = world.query_filtered::<Entity, With<HostileToPlayer>>();
-        query.iter(world).next().expect("monster entity")
-    };
-    *app.world_mut().resource_mut::<CurrentActor>() = CurrentActor(Some(monster));
-    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
-    rogue_core::drive_simulation(app.world_mut());
-    {
-        let mut rng = app.world_mut().resource_mut::<RandomStreams>();
-        rng.next_ai_u64();
-        rng.next_combat_u64();
-        rng.next_loot_u64();
-    }
-
     snapshot_world(app.world()).expect("snapshot should be valid")
+}
+
+fn run_commands(app: &mut App, commands: &[ActionKindSnapshot]) {
+    for command in commands {
+        drive_command(app, command);
+    }
+}
+
+fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    rogue_core::persistence::snapshot::restore_world(app.world_mut(), snapshot)
+        .expect("restore snapshot");
+    app
 }
 
 #[test]
@@ -379,4 +397,114 @@ fn replay_advances_all_authoritative_rng_streams() {
     assert_ne!(snapshot.rng.ai_state, initial.ai_state);
     assert_ne!(snapshot.rng.combat_state, initial.combat_state);
     assert_ne!(snapshot.rng.loot_state, initial.loot_state);
+}
+
+#[test]
+fn continuation_after_restore_matches_the_original_world() {
+    let fixture = load_fixture();
+    let split = fixture.commands.len().saturating_sub(2);
+    let mut original_app = App::new();
+    original_app.add_plugins(SimulationPlugin);
+    initialize_world(&mut original_app, fixture.seed);
+    run_commands(&mut original_app, &fixture.commands[..split]);
+
+    let prefix_snapshot = snapshot_world(original_app.world()).expect("prefix snapshot");
+    let prefix_text = snapshot_to_text(&prefix_snapshot).expect("serialize prefix");
+    let restored_snapshot = match snapshot_from_text(&prefix_text).expect("deserialize prefix") {
+        rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V1(_) => {
+            panic!("prefix snapshot unexpectedly downgraded")
+        }
+    };
+
+    let mut restored_app = restore_app_from_snapshot(&restored_snapshot);
+    run_commands(&mut original_app, &fixture.commands[split..]);
+    run_commands(&mut restored_app, &fixture.commands[split..]);
+
+    let original_final = snapshot_world(original_app.world()).expect("original final snapshot");
+    let restored_final = snapshot_world(restored_app.world()).expect("restored final snapshot");
+
+    assert_eq!(original_final, restored_final);
+    assert_eq!(
+        snapshot_digest(&original_final).expect("original digest"),
+        snapshot_digest(&restored_final).expect("restored digest")
+    );
+}
+
+#[test]
+fn snapshot_world_requires_authoritative_resources() {
+    let cases = [
+        ("random streams", "missing random streams resource"),
+        (
+            "persistent id allocator",
+            "missing persistent id allocator resource",
+        ),
+        ("turn clock", "missing turn clock resource"),
+        ("action queue", "missing action queue resource"),
+        ("effect queue", "missing effect queue resource"),
+        ("simulation status", "missing simulation status resource"),
+        ("current actor", "missing current actor resource"),
+        ("action decision", "missing action decision resource"),
+    ];
+
+    for (label, expected) in cases {
+        let mut app = App::new();
+        app.add_plugins(SimulationPlugin);
+        initialize_world(&mut app, 0);
+
+        match label {
+            "random streams" => {
+                app.world_mut().remove_resource::<RandomStreams>();
+            }
+            "persistent id allocator" => {
+                app.world_mut().remove_resource::<PersistentIdAllocator>();
+            }
+            "turn clock" => {
+                app.world_mut().remove_resource::<TurnClock>();
+            }
+            "action queue" => {
+                app.world_mut().remove_resource::<ActionQueue>();
+            }
+            "effect queue" => {
+                app.world_mut()
+                    .remove_resource::<rogue_core::item::effects::EffectQueue>();
+            }
+            "simulation status" => {
+                app.world_mut().remove_resource::<SimulationStatus>();
+            }
+            "current actor" => {
+                app.world_mut().remove_resource::<CurrentActor>();
+            }
+            "action decision" => {
+                app.world_mut()
+                    .remove_resource::<rogue_core::action::resolver::ActionDecision>();
+            }
+            _ => unreachable!(),
+        }
+
+        let err = snapshot_world(app.world()).expect_err(label);
+        assert!(
+            err.contains(expected),
+            "{} should mention `{}` but was `{}`",
+            label,
+            expected,
+            err
+        );
+    }
+}
+
+#[test]
+fn failed_restore_does_not_mutate_the_live_world() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    let mut corrupted = before.clone();
+    corrupted.root_seed ^= 1;
+    let result = rogue_core::persistence::snapshot::restore_world(app.world_mut(), &corrupted);
+    assert!(result.is_err());
+
+    let after = snapshot_world(app.world()).expect("after snapshot");
+    assert_eq!(before, after);
 }
