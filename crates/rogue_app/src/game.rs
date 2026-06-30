@@ -221,8 +221,22 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     }
 
     let mut clock = TurnClock::default();
-    clock.schedule_at(player, 0);
-    clock.schedule_at(monster, 0);
+    clock.schedule_at(
+        world
+            .entity(player)
+            .get::<StableActorId>()
+            .expect("stable player id")
+            .0,
+        0,
+    );
+    clock.schedule_at(
+        world
+            .entity(monster)
+            .get::<StableActorId>()
+            .expect("stable monster id")
+            .0,
+        0,
+    );
 
     world.insert_resource(map);
     world.insert_resource(spatial);

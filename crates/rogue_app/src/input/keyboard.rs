@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
-use rogue_core::actor::components::Player;
+use rogue_core::actor::components::{Player, StableActorId};
 use rogue_core::simulation::SimulationStatus;
 
 use crate::app_state::{AppState, CurrentInputMode, InputMode};
@@ -37,7 +37,7 @@ fn backup_key_to_delta(key: KeyCode) -> Option<IVec2> {
 
 pub fn capture_keyboard_input(
     keys: Res<'_, ButtonInput<KeyCode>>,
-    player: Query<'_, '_, Entity, With<Player>>,
+    player: Query<'_, '_, &StableActorId, With<Player>>,
     mut queue: ResMut<'_, ActionQueue>,
     mut simulation: ResMut<'_, SimulationStatus>,
     input_mode: Res<'_, CurrentInputMode>,
@@ -70,7 +70,7 @@ pub fn capture_keyboard_input(
 
     if let Some(kind) = action {
         queue.push(Action {
-            actor: player,
+            actor: player.0,
             kind,
         });
         *simulation = SimulationStatus::Resolving;

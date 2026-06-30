@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
-use bevy_ecs::prelude::Entity;
 use bevy_ecs::prelude::Resource;
 
 use crate::action::intent::Action;
+use crate::actor::components::ActorId;
 
 #[derive(Resource, Default, Debug, Clone)]
 pub struct ActionQueue {
@@ -26,11 +26,11 @@ impl ActionQueue {
         self.actions.pop_front()
     }
 
-    pub fn contains_actor(&self, actor: Entity) -> bool {
+    pub fn contains_actor(&self, actor: ActorId) -> bool {
         self.actions.iter().any(|action| action.actor == actor)
     }
 
-    pub fn take_for_actor(&mut self, actor: Entity) -> Option<Action> {
+    pub fn take_for_actor(&mut self, actor: ActorId) -> Option<Action> {
         let index = self
             .actions
             .iter()

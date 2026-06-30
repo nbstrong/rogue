@@ -3,7 +3,6 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 use bevy_math::IVec2;
 use serde::Deserialize;
-use std::collections::HashMap;
 
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
@@ -43,57 +42,30 @@ fn load_fixture() -> ReplayFixture {
         .expect("deterministic replay fixture")
 }
 
-fn persistent_entity_map(world: &mut World) -> HashMap<u64, Entity> {
-    let mut entities = HashMap::new();
-    let mut query = world.query::<(Entity, &PersistentId)>();
-    for (entity, id) in query.iter(world) {
-        entities.insert(id.0, entity);
-    }
-    entities
-}
-
-fn command_to_action_kind(
-    entity_map: &HashMap<u64, Entity>,
-    command: &ActionKindSnapshot,
-) -> ActionKind {
+fn command_to_action_kind(command: &ActionKindSnapshot) -> ActionKind {
     match command {
         ActionKindSnapshot::Wait => ActionKind::Wait,
         ActionKindSnapshot::Move { dx, dy } => ActionKind::Move {
             delta: IVec2::new(*dx, *dy),
         },
         ActionKindSnapshot::Melee { target } => ActionKind::Melee {
-            target: entity_map
-                .get(target)
-                .copied()
-                .unwrap_or_else(|| panic!("missing entity for persistent id {}", target)),
+            target: rogue_core::ActorId::new(*target).expect("valid actor id"),
         },
         ActionKindSnapshot::PickUp { item } => ActionKind::PickUp {
-            item: entity_map
-                .get(item)
-                .copied()
-                .unwrap_or_else(|| panic!("missing entity for persistent id {}", item)),
+            item: rogue_core::ItemId::new(*item).expect("valid item id"),
         },
         ActionKindSnapshot::Drop { item } => ActionKind::Drop {
-            item: entity_map
-                .get(item)
-                .copied()
-                .unwrap_or_else(|| panic!("missing entity for persistent id {}", item)),
+            item: rogue_core::ItemId::new(*item).expect("valid item id"),
         },
         ActionKindSnapshot::UseItem { item, target } => ActionKind::UseItem {
-            item: entity_map
-                .get(item)
-                .copied()
-                .unwrap_or_else(|| panic!("missing entity for persistent id {}", item)),
+            item: rogue_core::ItemId::new(*item).expect("valid item id"),
             target: match target {
                 rogue_core::persistence::snapshot::ActionTargetSnapshot::SelfTarget => {
                     rogue_core::action::intent::ActionTarget::SelfTarget
                 }
                 rogue_core::persistence::snapshot::ActionTargetSnapshot::Entity(id) => {
-                    rogue_core::action::intent::ActionTarget::Entity(
-                        entity_map
-                            .get(id)
-                            .copied()
-                            .unwrap_or_else(|| panic!("missing entity for persistent id {}", id)),
+                    rogue_core::action::intent::ActionTarget::Actor(
+                        rogue_core::ActorId::new(*id).expect("valid actor id"),
                     )
                 }
                 rogue_core::persistence::snapshot::ActionTargetSnapshot::Cell { level, x, y } => {
@@ -192,7 +164,7 @@ fn initialize_world(app: &mut App, seed: u64) {
         }
     };
 
-    let player = {
+    let _player = {
         let stable_actor_id =
             rogue_core::ActorId::new(player_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
@@ -225,7 +197,7 @@ fn initialize_world(app: &mut App, seed: u64) {
         entity.id()
     };
 
-    let monster = {
+    let _monster = {
         let stable_actor_id =
             rogue_core::ActorId::new(monster_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
@@ -273,12 +245,14 @@ fn initialize_world(app: &mut App, seed: u64) {
         entity.id()
     };
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(monster, 0);
+    app.world_mut().resource_mut::<TurnClock>().schedule_at(
+        rogue_core::ActorId::new(player_persistent_id.0).expect("valid actor id"),
+        0,
+    );
+    app.world_mut().resource_mut::<TurnClock>().schedule_at(
+        rogue_core::ActorId::new(monster_persistent_id.0).expect("valid actor id"),
+        0,
+    );
 
     build_spatial_index(app.world_mut());
     build_stable_entity_index(app.world_mut());
@@ -303,16 +277,16 @@ fn initialize_world(app: &mut App, seed: u64) {
 }
 
 fn drive_command(app: &mut App, command: &ActionKindSnapshot) {
-    let (player, entity_map) = {
+    let player = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<Entity, With<Player>>();
-        let player = query.iter(world).next().expect("player entity");
-        (player, persistent_entity_map(world))
+        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Player>>();
+        let (_, stable_id) = query.iter(world).next().expect("player entity");
+        stable_id.0
     };
 
     app.world_mut().resource_mut::<ActionQueue>().push(Action {
         actor: player,
-        kind: command_to_action_kind(&entity_map, command),
+        kind: command_to_action_kind(command),
     });
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     rogue_core::drive_simulation(app.world_mut());
@@ -325,8 +299,9 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
 
     let monster = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<Entity, With<Monster>>();
-        query.iter(world).next().expect("monster entity")
+        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let (_, stable_id) = query.iter(world).next().expect("monster entity");
+        stable_id.0
     };
     app.world_mut()
         .resource_mut::<ActionQueue>()
@@ -698,7 +673,7 @@ fn malformed_snapshots_are_rejected() {
         capacity: 4,
         items: vec![player_id],
     });
-    cases.push(("inventory references non-item", non_item, "non-item"));
+    cases.push(("inventory references non-item", non_item, "missing item"));
 
     let mut missing_carried = base.clone();
     missing_carried
@@ -1007,21 +982,24 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
         .resource_mut::<EffectQueue>()
         .0
         .push_back(Effect::ApplyStatus {
-            target: player,
+            target: rogue_core::ActorId::new(player_id.0).expect("valid actor id"),
             status: StatusEffect::Poisoned { remaining: 3 },
         });
     app.world_mut()
         .resource_mut::<EffectQueue>()
         .0
         .push_back(Effect::ApplyStatus {
-            target: player,
+            target: rogue_core::ActorId::new(player_id.0).expect("valid actor id"),
             status: StatusEffect::Stunned { remaining: 2 },
         });
 
+    build_stable_entity_index(app.world_mut());
     app.world_mut()
         .run_system_once(apply_pending_effects)
         .expect("apply effects");
+    app.world_mut().flush();
 
+    build_stable_entity_index(app.world_mut());
     let statuses = app
         .world()
         .entity(player)

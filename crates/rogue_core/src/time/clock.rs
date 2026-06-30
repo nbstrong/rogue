@@ -1,5 +1,5 @@
-use bevy_ecs::prelude::Entity;
+use crate::actor::components::ActorId;
 
-pub type CurrentActor = sim_core::schedule::CurrentActor<Entity>;
-pub type ScheduledActor = sim_core::schedule::ScheduledWork<Entity>;
-pub type TurnClock = sim_core::schedule::TurnClock<Entity>;
+pub type CurrentActor = sim_core::schedule::CurrentActor<ActorId>;
+pub type ScheduledActor = sim_core::schedule::ScheduledWork<ActorId>;
+pub type TurnClock = sim_core::schedule::TurnClock<ActorId>;

@@ -212,11 +212,13 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     let player = {
         let world = app.world_mut();
         world
-            .query_filtered::<Entity, With<Player>>()
+            .query_filtered::<(&rogue_core::actor::components::StableActorId, Entity), With<Player>>()
             .iter(world)
             .next()
+            .map(|(stable_id, entity)| (stable_id.0, entity))
             .expect("player entity")
     };
+    let (player_id, player) = player;
 
     app.world_mut().entity_mut(player).insert(Health {
         current: 0,
@@ -224,11 +226,11 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     });
     app.world_mut()
         .resource_mut::<rogue_core::time::clock::TurnClock>()
-        .schedule_at(player, 0);
+        .schedule_at(player_id, 0);
     app.world_mut()
         .resource_mut::<rogue_core::action::queue::ActionQueue>()
         .push(rogue_core::action::intent::Action {
-            actor: player,
+            actor: player_id,
             kind: rogue_core::action::intent::ActionKind::Wait,
         });
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
@@ -458,11 +460,13 @@ fn loaded_durable_entities_do_not_leak_across_restart() {
     let player = {
         let world = loaded_app.world_mut();
         world
-            .query_filtered::<Entity, With<Player>>()
+            .query_filtered::<(&rogue_core::actor::components::StableActorId, Entity), With<Player>>()
             .iter(world)
             .next()
+            .map(|(stable_id, entity)| (stable_id.0, entity))
             .expect("player entity")
     };
+    let (player_id, player) = player;
     loaded_app.world_mut().entity_mut(player).insert(Health {
         current: 0,
         maximum: 10,
@@ -470,12 +474,12 @@ fn loaded_durable_entities_do_not_leak_across_restart() {
     loaded_app
         .world_mut()
         .resource_mut::<rogue_core::time::clock::TurnClock>()
-        .schedule_at(player, 0);
+        .schedule_at(player_id, 0);
     loaded_app
         .world_mut()
         .resource_mut::<rogue_core::action::queue::ActionQueue>()
         .push(rogue_core::action::intent::Action {
-            actor: player,
+            actor: player_id,
             kind: rogue_core::action::intent::ActionKind::Wait,
         });
     *loaded_app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;

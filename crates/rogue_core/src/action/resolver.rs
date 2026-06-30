@@ -6,7 +6,8 @@ use crate::action::queue::ActionQueue;
 use crate::action::schedule::action_cost;
 use crate::actor::combat::{DamageKind, melee_damage};
 use crate::actor::components::{
-    ActionSpeed, BlocksMovement, CombatStats, Health, Monster, Player, PrototypeId,
+    ActionSpeed, ActorId, BlocksMovement, CombatStats, Health, Monster, Player, PrototypeId,
+    StableActorId, StableEntityIndex,
 };
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
@@ -79,14 +80,22 @@ fn action_ticks(kind: &ActionKind, speed: u64) -> u64 {
     action_ticks_from_base(action_cost(kind), speed)
 }
 
-fn scheduled_speed(speeds: &Query<'_, '_, &ActionSpeed>, actor: Entity) -> u64 {
+fn scheduled_speed(
+    stable_index: &StableEntityIndex,
+    speeds: &Query<'_, '_, &ActionSpeed>,
+    actor: ActorId,
+) -> u64 {
+    let Some(actor_entity) = stable_index.actor(actor) else {
+        return 100;
+    };
     speeds
-        .get(actor)
+        .get(actor_entity)
         .map(|speed| speed.ticks_per_action)
         .unwrap_or(100)
 }
 
 fn actor_flags(
+    stable_index: &StableEntityIndex,
     positions: &Query<
         '_,
         '_,
@@ -102,9 +111,10 @@ fn actor_flags(
             Option<&Item>,
             Option<&CarriedBy>,
             Option<&PrototypeId>,
+            Option<&StableActorId>,
         ),
     >,
-    entity: Entity,
+    actor: ActorId,
 ) -> Option<(
     GridPosition,
     bool,
@@ -114,6 +124,7 @@ fn actor_flags(
     bool,
     Option<CombatStats>,
 )> {
+    let entity = stable_index.actor(actor)?;
     positions.get(entity).ok().map(
         |(
             _,
@@ -127,6 +138,7 @@ fn actor_flags(
             _item,
             _carried_by,
             _prototype,
+            _stable_actor_id,
         )| {
             (
                 *position,
@@ -156,7 +168,8 @@ fn can_attack(
 }
 
 fn find_valid_move_collision(
-    action_actor: Entity,
+    stable_index: &StableEntityIndex,
+    action_actor: ActorId,
     destination: GridPosition,
     attacker_is_player: bool,
     attacker_is_hostile_to_player: bool,
@@ -175,20 +188,24 @@ fn find_valid_move_collision(
             Option<&Item>,
             Option<&CarriedBy>,
             Option<&PrototypeId>,
+            Option<&StableActorId>,
         ),
     >,
     spatial: &SpatialIndex,
-) -> Option<Entity> {
+) -> Option<ActorId> {
     let mut candidate = None;
     let mut has_blocker = false;
+    let Some(action_actor_entity) = stable_index.actor(action_actor) else {
+        return None;
+    };
 
     for occupant in spatial.occupants_at(destination.level, destination.cell) {
-        if occupant == action_actor {
+        if occupant == action_actor_entity {
             continue;
         }
 
         let Ok((
-            entity,
+            _entity,
             _,
             occupant_player,
             occupant_monster,
@@ -199,6 +216,7 @@ fn find_valid_move_collision(
             _item,
             _carried_by,
             _prototype,
+            occupant_stable_id,
         )) = positions.get(occupant)
         else {
             continue;
@@ -222,7 +240,7 @@ fn find_valid_move_collision(
             occupant_hostile.is_some(),
         ) && occupant_stats.is_some()
         {
-            candidate = Some(entity);
+            candidate = occupant_stable_id.map(|id| id.0);
         } else {
             return None;
         }
@@ -234,6 +252,7 @@ fn find_valid_move_collision(
 pub fn validate_action(
     mut queue: ResMut<'_, ActionQueue>,
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
+    stable_index: Res<'_, StableEntityIndex>,
     mut decision: ResMut<'_, ActionDecision>,
     mut status: ResMut<'_, SimulationStatus>,
     map: Res<'_, LevelMap>,
@@ -254,6 +273,7 @@ pub fn validate_action(
             Option<&Item>,
             Option<&CarriedBy>,
             Option<&PrototypeId>,
+            Option<&StableActorId>,
         ),
     >,
 ) {
@@ -267,7 +287,7 @@ pub fn validate_action(
     };
 
     let Some((_, current_is_player, _, _, _, current_is_hostile_to_player, _)) =
-        actor_flags(&positions, current_actor)
+        actor_flags(&stable_index, &positions, current_actor)
     else {
         *decision = ActionDecision::Failed {
             action: Action {
@@ -306,6 +326,7 @@ pub fn validate_action(
         &spatial,
         current_is_player,
         current_is_hostile_to_player,
+        &stable_index,
         &positions,
         &inventories,
     );
@@ -323,6 +344,7 @@ pub fn resolve_action(
     mut effects: ResMut<'_, EffectQueue>,
     mut map: ResMut<'_, LevelMap>,
     spatial: Res<'_, SpatialIndex>,
+    stable_index: Res<'_, StableEntityIndex>,
     positions: Query<
         '_,
         '_,
@@ -338,6 +360,7 @@ pub fn resolve_action(
             Option<&Item>,
             Option<&CarriedBy>,
             Option<&PrototypeId>,
+            Option<&StableActorId>,
         ),
     >,
     speeds: Query<'_, '_, &ActionSpeed>,
@@ -372,7 +395,7 @@ pub fn resolve_action(
         return;
     }
 
-    let actor_speed = scheduled_speed(&speeds, action.actor);
+    let actor_speed = scheduled_speed(&stable_index, &speeds, action.actor);
     let should_reschedule = !matches!(failure, Some(ActionFailure::ActorUnavailable));
 
     if let Some(failure) = failure {
@@ -398,7 +421,7 @@ pub fn resolve_action(
                 _,
                 attacker_is_hostile_to_player,
                 attacker_stats,
-            )) = actor_flags(&positions, action.actor)
+            )) = actor_flags(&stable_index, &positions, action.actor)
             else {
                 if should_reschedule {
                     schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
@@ -439,6 +462,7 @@ pub fn resolve_action(
                     | Some(TileKind::StairsDown)
                     | Some(TileKind::StairsUp) => {
                         if let Some(target) = find_valid_move_collision(
+                            &stable_index,
                             action.actor,
                             destination,
                             attacker_is_player,
@@ -458,7 +482,10 @@ pub fn resolve_action(
                                 _,
                                 _,
                                 _,
-                            )) = positions.get(target).ok()
+                                _,
+                            )) = stable_index
+                                .actor(target)
+                                .and_then(|entity| positions.get(entity).ok())
                             {
                                 if let (Some(attacker_stats), Some(target_stats)) =
                                     (attacker_stats, target_stats.copied())
@@ -498,16 +525,18 @@ pub fn resolve_action(
                             .all(|occupant| {
                                 positions.get(occupant).map_or(
                                     true,
-                                    |(_, _, _, _, _, blocks_movement, _, _, _, _, _)| {
+                                    |(_, _, _, _, _, blocks_movement, _, _, _, _, _, _)| {
                                         blocks_movement.is_none()
                                     },
                                 )
                             })
                         {
-                            commands.entity(action.actor).insert(GridPosition {
-                                level: actor_position.level,
-                                cell: destination.cell,
-                            });
+                            if let Some(actor_entity) = stable_index.actor(action.actor) {
+                                commands.entity(actor_entity).insert(GridPosition {
+                                    level: actor_position.level,
+                                    cell: destination.cell,
+                                });
+                            }
                             schedule_actor(
                                 &mut turn_clock,
                                 action.actor,
@@ -535,7 +564,7 @@ pub fn resolve_action(
                 _,
                 attacker_is_hostile_to_player,
                 attacker_stats,
-            )) = actor_flags(&positions, action.actor)
+            )) = actor_flags(&stable_index, &positions, action.actor)
             else {
                 if should_reschedule {
                     schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
@@ -560,7 +589,7 @@ pub fn resolve_action(
                 _,
                 target_is_hostile_to_player,
                 target_stats,
-            )) = target_flags(&positions, target)
+            )) = target_flags(&stable_index, &positions, target)
             else {
                 if should_reschedule {
                     schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
@@ -618,7 +647,21 @@ pub fn resolve_action(
             }
         }
         ActionKind::PickUp { item } => {
-            let Some(mut inventory) = inventories.get_mut(action.actor).ok() else {
+            let Some(actor_entity) = stable_index.actor(action.actor) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(item_entity) = stable_index.item(item) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(mut inventory) = inventories.get_mut(actor_entity).ok() else {
                 outcomes.push(ActionOutcome::Failed {
                     action: action.clone(),
                     failure: ActionFailure::MissingItem,
@@ -635,13 +678,27 @@ pub fn resolve_action(
             if !inventory.items.contains(&item) {
                 inventory.items.push(item);
             }
-            commands.entity(item).insert(CarriedBy(action.actor));
+            commands.entity(item_entity).insert(CarriedBy(action.actor));
             if should_reschedule {
                 schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
             }
         }
         ActionKind::Drop { item } => {
-            let Some(mut inventory) = inventories.get_mut(action.actor).ok() else {
+            let Some(actor_entity) = stable_index.actor(action.actor) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(item_entity) = stable_index.item(item) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(mut inventory) = inventories.get_mut(actor_entity).ok() else {
                 outcomes.push(ActionOutcome::Failed {
                     action: action.clone(),
                     failure: ActionFailure::MissingItem,
@@ -656,18 +713,32 @@ pub fn resolve_action(
                 return;
             };
             inventory.items.remove(index);
-            if let Some((_, actor_position, _, _, _, _, _, _, _, _, _)) =
-                positions.get(action.actor).ok()
+            if let Some((_, actor_position, _, _, _, _, _, _, _, _, _, _)) =
+                positions.get(actor_entity).ok()
             {
-                commands.entity(item).insert(*actor_position);
+                commands.entity(item_entity).insert(*actor_position);
             }
-            commands.entity(item).remove::<CarriedBy>();
+            commands.entity(item_entity).remove::<CarriedBy>();
             if should_reschedule {
                 schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
             }
         }
         ActionKind::UseItem { item, target } => {
-            let Some(mut inventory) = inventories.get_mut(action.actor).ok() else {
+            let Some(actor_entity) = stable_index.actor(action.actor) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(item_entity) = stable_index.item(item) else {
+                outcomes.push(ActionOutcome::Failed {
+                    action: action.clone(),
+                    failure: ActionFailure::MissingItem,
+                });
+                return;
+            };
+            let Some(mut inventory) = inventories.get_mut(actor_entity).ok() else {
                 outcomes.push(ActionOutcome::Failed {
                     action: action.clone(),
                     failure: ActionFailure::MissingItem,
@@ -682,18 +753,18 @@ pub fn resolve_action(
                 return;
             };
             let prototype = positions
-                .get(item)
+                .get(item_entity)
                 .ok()
-                .and_then(|(_, _, _, _, _, _, _, _, _, _, prototype)| {
+                .and_then(|(_, _, _, _, _, _, _, _, _, _, prototype, _)| {
                     prototype.map(|prototype| prototype.0.clone())
                 })
                 .unwrap_or_else(|| "unknown".to_string());
             inventory.items.remove(index);
-            commands.entity(item).despawn();
+            commands.entity(item_entity).despawn();
 
             let use_target_is_self = match target {
                 ActionTarget::SelfTarget => true,
-                ActionTarget::Entity(entity) => entity == action.actor,
+                ActionTarget::Actor(entity) => entity == action.actor,
                 _ => false,
             };
             if use_target_is_self {
@@ -722,6 +793,7 @@ pub fn resolve_action(
 }
 
 fn target_flags(
+    stable_index: &StableEntityIndex,
     positions: &Query<
         '_,
         '_,
@@ -737,9 +809,10 @@ fn target_flags(
             Option<&Item>,
             Option<&CarriedBy>,
             Option<&PrototypeId>,
+            Option<&StableActorId>,
         ),
     >,
-    entity: Entity,
+    target: ActorId,
 ) -> Option<(
     GridPosition,
     bool,
@@ -749,6 +822,7 @@ fn target_flags(
     bool,
     Option<CombatStats>,
 )> {
+    let entity = stable_index.actor(target)?;
     positions.get(entity).ok().map(
         |(
             _,
@@ -762,6 +836,7 @@ fn target_flags(
             _item,
             _carried_by,
             _prototype,
+            _stable_actor_id,
         )| {
             (
                 *position,
@@ -776,13 +851,13 @@ fn target_flags(
     )
 }
 
-fn schedule_actor(turn_clock: &mut TurnClock, actor: Entity, kind: &ActionKind, actor_speed: u64) {
+fn schedule_actor(turn_clock: &mut TurnClock, actor: ActorId, kind: &ActionKind, actor_speed: u64) {
     turn_clock.schedule_after(actor, action_ticks(kind, actor_speed));
 }
 
 fn schedule_actor_with_base(
     turn_clock: &mut TurnClock,
-    actor: Entity,
+    actor: ActorId,
     base: u64,
     actor_speed: u64,
 ) {
@@ -795,6 +870,7 @@ fn validate_action_kind(
     spatial: &SpatialIndex,
     attacker_is_player: bool,
     attacker_is_hostile_to_player: bool,
+    stable_index: &StableEntityIndex,
     positions: &Query<
         '_,
         '_,
@@ -810,6 +886,7 @@ fn validate_action_kind(
             Option<&Item>,
             Option<&CarriedBy>,
             Option<&PrototypeId>,
+            Option<&StableActorId>,
         ),
     >,
     inventories: &Query<'_, '_, &Inventory>,
@@ -817,7 +894,8 @@ fn validate_action_kind(
     match &action.kind {
         ActionKind::Wait => Ok(()),
         ActionKind::Move { delta } => {
-            let Some((actor_position, _, _, _, _, _, _)) = actor_flags(positions, action.actor)
+            let Some((actor_position, _, _, _, _, _, _)) =
+                actor_flags(stable_index, positions, action.actor)
             else {
                 return Err(ActionFailure::ActorUnavailable);
             };
@@ -841,6 +919,7 @@ fn validate_action_kind(
             }
 
             if find_valid_move_collision(
+                stable_index,
                 action.actor,
                 destination,
                 attacker_is_player,
@@ -857,7 +936,9 @@ fn validate_action_kind(
                 .occupants_at(actor_position.level, destination.cell)
                 .any(|occupant| {
                     positions.get(occupant).is_ok_and(
-                        |(_, _, _, _, _, blocks_movement, _, _, _, _, _)| blocks_movement.is_some(),
+                        |(_, _, _, _, _, blocks_movement, _, _, _, _, _, _)| {
+                            blocks_movement.is_some()
+                        },
                     )
                 });
 
@@ -869,7 +950,7 @@ fn validate_action_kind(
         }
         ActionKind::Melee { target } => {
             let Some((actor_position, _, _, _, _, _, attacker_stats)) =
-                actor_flags(positions, action.actor)
+                actor_flags(stable_index, positions, action.actor)
             else {
                 return Err(ActionFailure::ActorUnavailable);
             };
@@ -881,7 +962,7 @@ fn validate_action_kind(
                 _,
                 target_is_hostile_to_player,
                 target_stats,
-            )) = target_flags(positions, *target)
+            )) = target_flags(stable_index, positions, *target)
             else {
                 return Err(ActionFailure::InvalidTarget);
             };
@@ -925,13 +1006,19 @@ fn validate_action_kind(
             Ok(())
         }
         ActionKind::PickUp { item } => {
-            let Some((_, actor_position, _, _, _, _, _, _, _, _, _)) =
-                positions.get(action.actor).ok()
+            let Some(actor_entity) = stable_index.actor(action.actor) else {
+                return Err(ActionFailure::ActorUnavailable);
+            };
+            let Some(item_entity) = stable_index.item(*item) else {
+                return Err(ActionFailure::InvalidTarget);
+            };
+            let Some((_, actor_position, _, _, _, _, _, _, _, _, _, _)) =
+                positions.get(actor_entity).ok()
             else {
                 return Err(ActionFailure::ActorUnavailable);
             };
-            let Some((_, item_position, _, _, _, _, _, _, Some(_), carried_by, _)) =
-                positions.get(*item).ok()
+            let Some((_, item_position, _, _, _, _, _, _, Some(_), carried_by, _, _)) =
+                positions.get(item_entity).ok()
             else {
                 return Err(ActionFailure::InvalidTarget);
             };
@@ -940,7 +1027,7 @@ fn validate_action_kind(
                 return Err(ActionFailure::MissingItem);
             }
 
-            let Some(inventory) = inventories.get(action.actor).ok() else {
+            let Some(inventory) = inventories.get(actor_entity).ok() else {
                 return Err(ActionFailure::MissingItem);
             };
             if inventory.is_full() {
@@ -956,13 +1043,19 @@ fn validate_action_kind(
             Ok(())
         }
         ActionKind::Drop { item } => {
-            let Some((_, actor_position, _, _, _, _, _, _, _, _, _)) =
-                positions.get(action.actor).ok()
+            let Some(actor_entity) = stable_index.actor(action.actor) else {
+                return Err(ActionFailure::ActorUnavailable);
+            };
+            let Some(item_entity) = stable_index.item(*item) else {
+                return Err(ActionFailure::InvalidTarget);
+            };
+            let Some((_, actor_position, _, _, _, _, _, _, _, _, _, _)) =
+                positions.get(actor_entity).ok()
             else {
                 return Err(ActionFailure::ActorUnavailable);
             };
-            let Some((_, item_position, _, _, _, _, _, _, Some(_), carried_by, _)) =
-                positions.get(*item).ok()
+            let Some((_, item_position, _, _, _, _, _, _, Some(_), carried_by, _, _)) =
+                positions.get(item_entity).ok()
             else {
                 return Err(ActionFailure::InvalidTarget);
             };
@@ -970,7 +1063,7 @@ fn validate_action_kind(
             if carried_by.map(|carried| carried.0) != Some(action.actor) {
                 return Err(ActionFailure::MissingItem);
             }
-            if inventories.get(action.actor).is_err() {
+            if inventories.get(actor_entity).is_err() {
                 return Err(ActionFailure::MissingItem);
             }
             if actor_position.level != item_position.level {
@@ -979,14 +1072,22 @@ fn validate_action_kind(
             Ok(())
         }
         ActionKind::UseItem { item, target } => {
-            let Some((_, _, _, _, _, _, _, _, _, _, _)) = positions.get(action.actor).ok() else {
+            let Some(actor_entity) = stable_index.actor(action.actor) else {
                 return Err(ActionFailure::ActorUnavailable);
             };
-            let Some((_, _, _, _, _, _, _, _, Some(_), carried_by, _)) = positions.get(*item).ok()
+            let Some(item_entity) = stable_index.item(*item) else {
+                return Err(ActionFailure::InvalidTarget);
+            };
+            let Some((_, _, _, _, _, _, _, _, _, _, _, _)) = positions.get(actor_entity).ok()
+            else {
+                return Err(ActionFailure::ActorUnavailable);
+            };
+            let Some((_, _, _, _, _, _, _, _, Some(_), carried_by, _, _)) =
+                positions.get(item_entity).ok()
             else {
                 return Err(ActionFailure::InvalidTarget);
             };
-            if inventories.get(action.actor).is_err() {
+            if inventories.get(actor_entity).is_err() {
                 return Err(ActionFailure::MissingItem);
             }
             if carried_by.map(|carried| carried.0) != Some(action.actor) {
@@ -994,7 +1095,7 @@ fn validate_action_kind(
             }
             match target {
                 ActionTarget::SelfTarget => Ok(()),
-                ActionTarget::Entity(entity) if *entity == action.actor => Ok(()),
+                ActionTarget::Actor(entity) if *entity == action.actor => Ok(()),
                 _ => Err(ActionFailure::InvalidTarget),
             }
         }
@@ -1007,7 +1108,7 @@ pub fn select_next_action(_queue: Res<'_, ActionQueue>) {}
 pub fn resolve_action_target(target: ActionTarget) -> Option<LevelId> {
     match target {
         ActionTarget::SelfTarget => None,
-        ActionTarget::Entity(_) => None,
+        ActionTarget::Actor(_) => None,
         ActionTarget::Cell { level, .. } => Some(level),
     }
 }

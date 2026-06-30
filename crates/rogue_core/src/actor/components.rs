@@ -141,6 +141,6 @@ pub enum AiGoal {
     Idle,
     Wander,
     Investigate(GridPosition),
-    Chase(Entity),
-    Flee(Entity),
+    Chase(ActorId),
+    Flee(ActorId),
 }
