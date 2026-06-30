@@ -1,11 +1,31 @@
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 
+use crate::actor::components::Vision;
 use crate::world::map::GridPosition;
+use crate::world::map::LevelId;
 use crate::world::map::LevelMap;
+use crate::world::spatial::SpatialIndex;
 use crate::world::tile::TileKind;
 
-pub fn line_of_sight(map: &LevelMap, from: IVec2, to: IVec2) -> bool {
+fn cell_blocks_sight(map: &LevelMap, spatial: &SpatialIndex, level: LevelId, cell: IVec2) -> bool {
+    if spatial.sight_blockers.contains(&(level, cell)) {
+        return true;
+    }
+
+    matches!(
+        map.tile(cell).map(|tile| tile.kind),
+        Some(TileKind::Wall) | Some(TileKind::ClosedDoor) | None
+    )
+}
+
+pub fn line_of_sight(
+    map: &LevelMap,
+    spatial: &SpatialIndex,
+    level: LevelId,
+    from: IVec2,
+    to: IVec2,
+) -> bool {
     let mut x0 = from.x;
     let mut y0 = from.y;
     let x1 = to.x;
@@ -34,32 +54,33 @@ pub fn line_of_sight(map: &LevelMap, from: IVec2, to: IVec2) -> bool {
 
         let pos = IVec2::new(x0, y0);
         if pos != to {
-            match map.tile(pos).map(|tile| tile.kind) {
-                Some(TileKind::Wall) | Some(TileKind::ClosedDoor) => return false,
-                Some(_) => {}
-                None => return false,
+            if cell_blocks_sight(map, spatial, level, pos) {
+                return false;
             }
         }
     }
 }
 
-pub fn recalculate_fov_for_player(map: &mut LevelMap, player_position: GridPosition) {
+pub fn recalculate_fov_for_player(
+    map: &mut LevelMap,
+    spatial: &SpatialIndex,
+    player_position: GridPosition,
+    vision_range: u32,
+) {
     let origin = player_position.cell;
 
     for tile in &mut map.tiles {
         tile.visible = false;
     }
 
-    let range = 8;
-
     for y in 0..map.height as i32 {
         for x in 0..map.width as i32 {
             let cell = IVec2::new(x, y);
             let delta = cell - origin;
-            if delta.x.abs().max(delta.y.abs()) > range {
+            if delta.x.abs().max(delta.y.abs()) > vision_range as i32 {
                 continue;
             }
-            if line_of_sight(&map, origin, cell) {
+            if line_of_sight(map, spatial, player_position.level, origin, cell) {
                 if let Some(tile) = map.tile_mut(cell) {
                     tile.visible = true;
                     tile.explored = true;
@@ -71,11 +92,12 @@ pub fn recalculate_fov_for_player(map: &mut LevelMap, player_position: GridPosit
 
 pub fn recalculate_fov(
     mut map: ResMut<'_, LevelMap>,
-    player: Query<'_, '_, &GridPosition, With<crate::actor::components::Player>>,
+    spatial: Res<'_, SpatialIndex>,
+    player: Query<'_, '_, (&GridPosition, &Vision), With<crate::actor::components::Player>>,
 ) {
-    let Some(player_position) = player.iter().next().copied() else {
+    let Some((player_position, vision)) = player.iter().next() else {
         return;
     };
 
-    recalculate_fov_for_player(&mut map, player_position);
+    recalculate_fov_for_player(&mut map, &spatial, *player_position, vision.range);
 }

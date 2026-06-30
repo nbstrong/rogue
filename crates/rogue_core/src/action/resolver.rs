@@ -529,7 +529,13 @@ pub fn resolve_action(
                     .abs()
                     .max((target_position.cell - actor_position.cell).y.abs())
                     == 1
-                && line_of_sight(&map, actor_position.cell, target_position.cell)
+                && line_of_sight(
+                    &map,
+                    &spatial,
+                    actor_position.level,
+                    actor_position.cell,
+                    target_position.cell,
+                )
                 && can_attack(
                     attacker_is_player,
                     attacker_is_hostile_to_player,
@@ -733,7 +739,13 @@ fn validate_action_kind(
                 return Err(ActionFailure::OutOfRange);
             }
 
-            if !line_of_sight(map, actor_position.cell, target_position.cell) {
+            if !line_of_sight(
+                map,
+                &spatial,
+                actor_position.level,
+                actor_position.cell,
+                target_position.cell,
+            ) {
                 return Err(ActionFailure::Blocked);
             }
 

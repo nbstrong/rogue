@@ -146,7 +146,7 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
         .unwrap_or_else(|| panic!("missing ogre definition"));
 
     let level = LevelId(0);
-    let map = generate_one_room(21, 15);
+    let mut map = generate_one_room(21, 15);
     let player_cell = IVec2::new(3, 7);
     let monster_cell = IVec2::new(8, 7);
 
@@ -156,6 +156,22 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     let mut spatial = SpatialIndex::default();
     insert_occupant(&mut spatial, level, player_cell, player, true, true);
     insert_occupant(&mut spatial, level, monster_cell, monster, true, true);
+
+    if let Some((_, vision)) = world
+        .query_filtered::<(&GridPosition, &Vision), With<Player>>()
+        .iter(world)
+        .next()
+    {
+        recalculate_fov_for_player(
+            &mut map,
+            &spatial,
+            GridPosition {
+                level,
+                cell: player_cell,
+            },
+            vision.range,
+        );
+    }
 
     let mut clock = TurnClock::default();
     clock.schedule_at(player, 0);
@@ -171,16 +187,6 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.insert_resource(ActionOutcomeLog::default());
     world.insert_resource(CurrentActor::default());
     world.insert_resource(CurrentInputMode::default());
-
-    if let Some(mut map) = world.get_resource_mut::<LevelMap>() {
-        recalculate_fov_for_player(
-            &mut map,
-            GridPosition {
-                level,
-                cell: player_cell,
-            },
-        );
-    }
 
     spawn_camera_if_needed(world);
 
