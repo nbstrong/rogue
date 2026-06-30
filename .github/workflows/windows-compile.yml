@@ -15,5 +15,4 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Compile rogue_app
-        run: cargo test -p rogue_app --features dev --no-run
-
+        run: cargo test -p rogue_app --no-run
