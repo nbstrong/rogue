@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use crate::persistence::rng::RandomSnapshot;
 use crate::persistence::snapshot::{
     ActionSnapshot, EffectSnapshot, EntitySnapshot, GameSnapshot, LevelSnapshot,
-    PersistentIdAllocatorSnapshot, RandomSnapshot, ScheduledActorSnapshot,
-    SimulationStatusSnapshot,
+    PersistentIdAllocatorSnapshot, ScheduledActorSnapshot, SimulationStatusSnapshot,
 };
+use sim_core::persistence::version::CURRENT_SCHEMA_VERSION;
 
-pub const CURRENT_SAVE_VERSION: u32 = 2;
+pub const CURRENT_SAVE_VERSION: u32 = CURRENT_SCHEMA_VERSION;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LegacyGameSnapshotV1 {

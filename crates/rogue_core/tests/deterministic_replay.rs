@@ -304,7 +304,8 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
         .resource_mut::<ActionQueue>()
         .actions
         .clear();
-    *app.world_mut().resource_mut::<CurrentActor>() = CurrentActor(Some(monster));
+    *app.world_mut().resource_mut::<CurrentActor>() =
+        sim_core::schedule::CurrentActor(Some(monster));
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     app.world_mut()
         .run_system_once(rogue_core::actor::ai::generate_ai_action)

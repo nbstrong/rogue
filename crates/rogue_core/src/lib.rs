@@ -11,6 +11,10 @@ pub mod world;
 
 pub use action::intent::{Action, ActionKind, ActionTarget};
 pub use actor::components::*;
+pub use sim_core::{
+    ActorId, IdAllocator, ItemId, PersistentTag, SimClock, SimId, SimSpeed, SimulationWorkBudget,
+    StableIdTag,
+};
 pub use simulation::{
     SimulationPlugin, SimulationSet, SimulationStatus, SimulationStep, drive_simulation,
 };

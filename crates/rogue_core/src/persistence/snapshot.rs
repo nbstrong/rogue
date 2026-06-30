@@ -21,16 +21,7 @@ use crate::world::spatial::SpatialIndex;
 use crate::world::tile::{Tile, TileKind};
 
 use super::migration::{LegacyGameSnapshotV1, SnapshotFile};
-use super::rng::RandomStreams;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RandomSnapshot {
-    pub seed: u64,
-    pub generation_state: u64,
-    pub combat_state: u64,
-    pub loot_state: u64,
-    pub ai_state: u64,
-}
+use super::rng::{RandomSnapshot, RandomStreams};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SavedPosition {
@@ -1398,7 +1389,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         let entity = *entity_map
             .get(&current_actor)
             .ok_or_else(|| format!("missing current actor {}", current_actor))?;
-        world.insert_resource(CurrentActor(Some(entity)));
+        world.insert_resource(sim_core::schedule::CurrentActor(Some(entity)));
     }
 
     if let Some(mut clock) = world.get_resource_mut::<TurnClock>() {

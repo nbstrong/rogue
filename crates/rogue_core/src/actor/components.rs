@@ -3,6 +3,9 @@ use bevy_math::IVec2;
 
 use crate::actor::combat::StatusEffect;
 use crate::world::map::{GridPosition, LevelId};
+
+pub type ActorId = sim_core::ActorId;
+pub type ItemId = sim_core::ItemId;
 #[derive(Component)]
 pub struct Actor;
 
