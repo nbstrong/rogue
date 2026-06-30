@@ -42,6 +42,23 @@ impl Default for ActionDecision {
     }
 }
 
+#[derive(Resource, Debug, Clone)]
+pub enum ActionOutcome {
+    Idle,
+    WaitingForPlayer,
+    Resolved(Action),
+    Failed {
+        action: Action,
+        failure: ActionFailure,
+    },
+}
+
+impl Default for ActionOutcome {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
 fn action_ticks_from_base(base: u64, speed: u64) -> u64 {
     base.saturating_mul(speed.max(1)) / 100
 }
@@ -97,8 +114,9 @@ fn actor_flags(
     )
 }
 
-fn is_hostile_target(
+fn can_attack(
     attacker_is_player: bool,
+    attacker_is_hostile_to_player: bool,
     target_is_player: bool,
     target_is_monster: bool,
     target_is_hostile_to_player: bool,
@@ -107,13 +125,14 @@ fn is_hostile_target(
         return target_is_monster && target_is_hostile_to_player;
     }
 
-    target_is_player
+    attacker_is_hostile_to_player && target_is_player
 }
 
 fn find_valid_move_collision(
     action_actor: Entity,
     destination: GridPosition,
     attacker_is_player: bool,
+    attacker_is_hostile_to_player: bool,
     positions: &Query<
         '_,
         '_,
@@ -162,8 +181,9 @@ fn find_valid_move_collision(
 
         has_blocker = true;
 
-        if is_hostile_target(
+        if can_attack(
             attacker_is_player,
+            attacker_is_hostile_to_player,
             occupant_player.is_some(),
             occupant_monster.is_some(),
             occupant_hostile.is_some(),
@@ -182,6 +202,7 @@ pub fn validate_action(
     mut queue: ResMut<'_, ActionQueue>,
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
     mut decision: ResMut<'_, ActionDecision>,
+    mut outcome: ResMut<'_, ActionOutcome>,
     mut status: ResMut<'_, SimulationStatus>,
     map: Res<'_, LevelMap>,
     spatial: Res<'_, SpatialIndex>,
@@ -201,6 +222,7 @@ pub fn validate_action(
     >,
 ) {
     *decision = ActionDecision::Idle;
+    *outcome = ActionOutcome::Idle;
 
     let Some(current_actor) = current_actor else {
         return;
@@ -209,36 +231,71 @@ pub fn validate_action(
         return;
     };
 
-    loop {
-        let Some(front) = queue.actions.front() else {
-            *status = SimulationStatus::WaitingForPlayer;
-            debug_assert!(
-                actor_flags(&positions, current_actor)
-                    .map(|(_, is_player, _, _, _, _, _)| is_player)
-                    .unwrap_or(false),
-                "scheduled actor had no available action"
-            );
-            *decision = ActionDecision::WaitingForPlayer;
-            return;
+    let Some((_, current_is_player, _, _, _, current_is_hostile_to_player, _)) =
+        actor_flags(&positions, current_actor)
+    else {
+        *decision = ActionDecision::Failed {
+            action: Action {
+                actor: current_actor,
+                kind: ActionKind::Wait,
+            },
+            failure: ActionFailure::ActorUnavailable,
         };
-
-        if front.actor != current_actor {
-            let stale = queue.pop().expect("front action must exist");
-            debug_assert_ne!(
-                stale.actor, current_actor,
-                "discarded queued action for the wrong actor"
-            );
-            continue;
-        }
-
-        let action = queue.pop().expect("validated front action");
-        let validation = validate_action_kind(&action, &map, &spatial, &positions);
-        *decision = match validation {
-            Ok(()) => ActionDecision::Ready(action),
-            Err(failure) => ActionDecision::Failed { action, failure },
+        *outcome = ActionOutcome::Failed {
+            action: Action {
+                actor: current_actor,
+                kind: ActionKind::Wait,
+            },
+            failure: ActionFailure::ActorUnavailable,
         };
         return;
-    }
+    };
+
+    let Some(action) = queue.take_for_actor(current_actor) else {
+        if current_is_player {
+            *status = SimulationStatus::WaitingForPlayer;
+            *decision = ActionDecision::WaitingForPlayer;
+            *outcome = ActionOutcome::WaitingForPlayer;
+        } else {
+            let action = Action {
+                actor: current_actor,
+                kind: ActionKind::Wait,
+            };
+            *decision = ActionDecision::Failed {
+                action: action.clone(),
+                failure: ActionFailure::ActorUnavailable,
+            };
+            *outcome = ActionOutcome::Failed {
+                action,
+                failure: ActionFailure::ActorUnavailable,
+            };
+        }
+        debug_assert!(
+            !current_is_player || !current_is_hostile_to_player,
+            "player actor should not be marked hostile-to-player"
+        );
+        return;
+    };
+
+    let validation = validate_action_kind(
+        &action,
+        &map,
+        &spatial,
+        current_is_player,
+        current_is_hostile_to_player,
+        &positions,
+    );
+    *decision = match validation {
+        Ok(()) => ActionDecision::Ready(action.clone()),
+        Err(failure) => ActionDecision::Failed {
+            action: action.clone(),
+            failure,
+        },
+    };
+    *outcome = match validation {
+        Ok(()) => ActionOutcome::Resolved(action),
+        Err(failure) => ActionOutcome::Failed { action, failure },
+    };
 }
 
 pub fn resolve_action(
@@ -264,6 +321,7 @@ pub fn resolve_action(
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
     mut turn_clock: ResMut<'_, TurnClock>,
     mut decision: ResMut<'_, ActionDecision>,
+    mut outcome: ResMut<'_, ActionOutcome>,
 ) {
     let Some(current_actor) = current_actor else {
         return;
@@ -296,8 +354,15 @@ pub fn resolve_action(
             schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
         }
         ActionKind::Move { delta } => {
-            let Some((actor_position, attacker_is_player, _, _, _, _, attacker_stats)) =
-                actor_flags(&positions, action.actor)
+            let Some((
+                actor_position,
+                attacker_is_player,
+                _,
+                _,
+                _,
+                attacker_is_hostile_to_player,
+                attacker_stats,
+            )) = actor_flags(&positions, action.actor)
             else {
                 return;
             };
@@ -330,6 +395,7 @@ pub fn resolve_action(
                         action.actor,
                         destination,
                         attacker_is_player,
+                        attacker_is_hostile_to_player,
                         &positions,
                         &spatial,
                     ) {
@@ -387,8 +453,15 @@ pub fn resolve_action(
             }
         }
         ActionKind::Melee { target } => {
-            let Some((actor_position, attacker_is_player, _, _, _, _, attacker_stats)) =
-                actor_flags(&positions, action.actor)
+            let Some((
+                actor_position,
+                attacker_is_player,
+                _,
+                _,
+                _,
+                attacker_is_hostile_to_player,
+                attacker_stats,
+            )) = actor_flags(&positions, action.actor)
             else {
                 return;
             };
@@ -416,8 +489,9 @@ pub fn resolve_action(
                     .max((target_position.cell - actor_position.cell).y.abs())
                     == 1
                 && line_of_sight(&map, actor_position.cell, target_position.cell)
-                && is_hostile_target(
+                && can_attack(
                     attacker_is_player,
+                    attacker_is_hostile_to_player,
                     target_is_player,
                     target_is_monster,
                     target_is_hostile_to_player,
@@ -446,6 +520,11 @@ pub fn resolve_action(
             schedule_actor(&mut turn_clock, action.actor, &action.kind, actor_speed);
         }
     }
+
+    *outcome = match failure {
+        Some(failure) => ActionOutcome::Failed { action, failure },
+        None => ActionOutcome::Resolved(action),
+    };
 }
 
 fn target_flags(
@@ -505,6 +584,8 @@ fn validate_action_kind(
     action: &Action,
     map: &LevelMap,
     spatial: &SpatialIndex,
+    attacker_is_player: bool,
+    attacker_is_hostile_to_player: bool,
     positions: &Query<
         '_,
         '_,
@@ -523,8 +604,7 @@ fn validate_action_kind(
     match &action.kind {
         ActionKind::Wait => Ok(()),
         ActionKind::Move { delta } => {
-            let Some((actor_position, attacker_is_player, _, _, _, _, _)) =
-                actor_flags(positions, action.actor)
+            let Some((actor_position, _, _, _, _, _, _)) = actor_flags(positions, action.actor)
             else {
                 return Err(ActionFailure::ActorUnavailable);
             };
@@ -551,6 +631,7 @@ fn validate_action_kind(
                 action.actor,
                 destination,
                 attacker_is_player,
+                attacker_is_hostile_to_player,
                 positions,
                 spatial,
             )
@@ -575,7 +656,7 @@ fn validate_action_kind(
             }
         }
         ActionKind::Melee { target } => {
-            let Some((actor_position, attacker_is_player, _, _, _, _, attacker_stats)) =
+            let Some((actor_position, _, _, _, _, _, attacker_stats)) =
                 actor_flags(positions, action.actor)
             else {
                 return Err(ActionFailure::ActorUnavailable);
@@ -613,8 +694,9 @@ fn validate_action_kind(
                 return Err(ActionFailure::Blocked);
             }
 
-            if !is_hostile_target(
+            if !can_attack(
                 attacker_is_player,
+                attacker_is_hostile_to_player,
                 target_is_player,
                 target_is_monster,
                 target_is_hostile_to_player,

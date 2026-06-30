@@ -3,7 +3,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
 
 use crate::action::queue::ActionQueue;
-use crate::action::resolver::{ActionDecision, resolve_action, validate_action};
+use crate::action::resolver::{ActionDecision, ActionOutcome, resolve_action, validate_action};
 use crate::actor::ai::generate_ai_action;
 use crate::item::effects::{EffectQueue, apply_pending_effects};
 use crate::time::clock::{CurrentActor, TurnClock};
@@ -45,6 +45,7 @@ impl Plugin for SimulationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActionQueue>()
             .init_resource::<ActionDecision>()
+            .init_resource::<ActionOutcome>()
             .init_resource::<EffectQueue>()
             .init_resource::<TurnClock>()
             .init_resource::<CurrentActor>()

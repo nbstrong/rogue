@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use bevy_ecs::prelude::Entity;
 use bevy_ecs::prelude::Resource;
 
 use crate::action::intent::Action;
@@ -16,6 +17,14 @@ impl ActionQueue {
 
     pub fn pop(&mut self) -> Option<Action> {
         self.actions.pop_front()
+    }
+
+    pub fn take_for_actor(&mut self, actor: Entity) -> Option<Action> {
+        let index = self
+            .actions
+            .iter()
+            .position(|action| action.actor == actor)?;
+        self.actions.remove(index)
     }
 
     pub fn is_empty(&self) -> bool {

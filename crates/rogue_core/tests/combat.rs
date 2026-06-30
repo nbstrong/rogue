@@ -3,6 +3,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
+use rogue_core::action::resolver::{ActionFailure, ActionOutcome};
 use rogue_core::actor::components::*;
 use rogue_core::item::components::Item;
 use rogue_core::item::effects::EffectQueue;
@@ -153,6 +154,37 @@ fn waiting_player_turn_is_preserved_until_action_arrives() {
 }
 
 #[test]
+fn actions_for_other_actors_are_preserved() {
+    let mut app = build_app();
+    let (player, monster) = spawn_test_world(&mut app);
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(player, 0);
+
+    {
+        let mut queue = app.world_mut().resource_mut::<ActionQueue>();
+        queue.push(Action {
+            actor: monster,
+            kind: ActionKind::Wait,
+        });
+        queue.push(Action {
+            actor: player,
+            kind: ActionKind::Wait,
+        });
+    }
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let queue = app.world().resource::<ActionQueue>();
+    assert_eq!(queue.actions.len(), 1);
+    assert_eq!(
+        queue.actions.front().map(|action| action.actor),
+        Some(monster)
+    );
+}
+
+#[test]
 fn moving_over_an_item_does_not_damage_it() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
@@ -249,6 +281,71 @@ fn moving_into_a_friendly_blocker_is_rejected() {
 }
 
 #[test]
+fn non_hostile_actor_does_not_bump_the_player() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    let neutral = app
+        .world_mut()
+        .spawn((
+            Actor,
+            Monster,
+            BlocksMovement,
+            BlocksSight,
+            Health {
+                current: 5,
+                maximum: 5,
+            },
+            CombatStats {
+                power: 2,
+                defense: 0,
+            },
+            Vision { range: 8 },
+            ActionSpeed {
+                ticks_per_action: 100,
+            },
+            PrototypeId("neutral".to_string()),
+            GridPosition {
+                level: LevelId(0),
+                cell: IVec2::new(1, 2),
+            },
+        ))
+        .id();
+
+    {
+        let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
+        spatial
+            .occupants
+            .entry((LevelId(0), IVec2::new(1, 2)))
+            .or_default()
+            .push(neutral);
+        spatial
+            .movement_blockers
+            .insert((LevelId(0), IVec2::new(1, 2)));
+        spatial
+            .sight_blockers
+            .insert((LevelId(0), IVec2::new(1, 2)));
+    }
+
+    app.world_mut()
+        .resource_mut::<TurnClock>()
+        .schedule_at(neutral, 0);
+    app.world_mut().resource_mut::<ActionQueue>().push(Action {
+        actor: neutral,
+        kind: ActionKind::Move {
+            delta: IVec2::new(1, 0),
+        },
+    });
+
+    app.world_mut().run_schedule(SimulationStep);
+
+    let player_health = app.world().entity(player).get::<Health>().unwrap();
+    let neutral_position = app.world().entity(neutral).get::<GridPosition>().unwrap();
+
+    assert_eq!(player_health.current, player_health.maximum);
+    assert_eq!(neutral_position.cell, IVec2::new(1, 2));
+}
+
+#[test]
 fn direct_melee_against_a_distant_target_fails_without_damage() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
@@ -302,6 +399,13 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
 
     let target_health = app.world().entity(target).get::<Health>().unwrap();
     assert_eq!(target_health.current, 9);
+    assert!(matches!(
+        app.world().resource::<ActionOutcome>(),
+        ActionOutcome::Failed {
+            failure: ActionFailure::OutOfRange,
+            ..
+        }
+    ));
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
