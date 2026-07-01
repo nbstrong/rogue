@@ -16,7 +16,7 @@ use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
 use crate::simulation::{SimulationDriverState, SimulationStatus};
 use crate::time::clock::{CurrentActor, ScheduledActor, TurnClock};
-use crate::world::fov::recalculate_fov_for_player;
+use crate::world::fov::recalculate_fov_for_actor;
 use crate::world::map::{GridPosition, LevelId, LevelMap};
 use crate::world::spatial::SpatialIndex;
 use crate::world::tile::{Tile, TileKind};
@@ -1377,7 +1377,7 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
     if let Some((player_position, vision)) = player_position
         && let Some(mut map) = world.get_resource_mut::<LevelMap>()
     {
-        recalculate_fov_for_player(&mut map, &spatial, player_position, vision.range);
+        recalculate_fov_for_actor(&mut map, &spatial, player_position, vision.range);
     }
 
     Ok(())

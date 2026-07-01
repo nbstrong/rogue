@@ -1562,7 +1562,6 @@ Move glyph-specific code into `renderer_ascii`.
 
 ```rust
 pub struct AsciiStyle {
-    pub glyph: char,
     pub foreground: ColorToken,
     pub background: Option<ColorToken>,
     pub modifiers: AsciiModifiers,

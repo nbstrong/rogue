@@ -34,7 +34,7 @@ impl ActionTarget {
     }
 }
 
-pub type PlayerIntent = ActionKind;
+pub type ActorIntent = ActionKind;
 
 impl From<GridPosition> for ActionTarget {
     fn from(value: GridPosition) -> Self {

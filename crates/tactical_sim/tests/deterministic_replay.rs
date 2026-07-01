@@ -30,7 +30,7 @@ use tactical_sim::simulation::{
     SimulationStep,
 };
 use tactical_sim::time::clock::{CurrentActor, TurnClock};
-use tactical_sim::world::fov::recalculate_fov_for_player;
+use tactical_sim::world::fov::recalculate_fov_for_actor;
 use tactical_sim::world::generation::generate_one_room_with_rng;
 use tactical_sim::world::map::{GridPosition, LevelId, LevelMap};
 use tactical_sim::world::spatial::SpatialIndex;
@@ -384,7 +384,7 @@ fn initialize_world(app: &mut App, seed: u64) {
             .expect("player position")
     };
     let mut map = app.world_mut().resource_mut::<LevelMap>();
-    recalculate_fov_for_player(
+    recalculate_fov_for_actor(
         &mut map,
         &spatial,
         player_position.0,
@@ -1921,7 +1921,7 @@ fn nonzero_level_ids_survive_restore_and_resave() {
     };
     let spatial = app.world().resource::<SpatialIndex>().clone();
     let mut map = app.world_mut().resource_mut::<LevelMap>();
-    recalculate_fov_for_player(
+    recalculate_fov_for_actor(
         &mut map,
         &spatial,
         player_position.0,

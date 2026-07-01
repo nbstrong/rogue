@@ -3,7 +3,7 @@ use bevy_math::IVec2;
 use tactical_sim::actor::components::{BlocksSight, ControlledActor, PersistentId, Vision};
 use tactical_sim::simulation::SimulationPlugin;
 use tactical_sim::simulation::SimulationStep;
-use tactical_sim::world::fov::recalculate_fov_for_player;
+use tactical_sim::world::fov::recalculate_fov_for_actor;
 use tactical_sim::world::map::{GridPosition, LevelId, LevelMap};
 use tactical_sim::world::spatial::SpatialIndex;
 use tactical_sim::world::tile::TileKind;
@@ -15,7 +15,7 @@ fn recalculate(
     cell: IVec2,
     range: u32,
 ) {
-    recalculate_fov_for_player(map, spatial, GridPosition { level, cell }, range);
+    recalculate_fov_for_actor(map, spatial, GridPosition { level, cell }, range);
 }
 
 #[test]

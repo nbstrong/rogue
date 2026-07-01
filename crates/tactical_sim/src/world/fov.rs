@@ -61,13 +61,13 @@ pub fn line_of_sight(
     }
 }
 
-pub fn recalculate_fov_for_player(
+pub fn recalculate_fov_for_actor(
     map: &mut LevelMap,
     spatial: &SpatialIndex,
-    player_position: GridPosition,
+    actor_position: GridPosition,
     vision_range: u32,
 ) {
-    let origin = player_position.cell;
+    let origin = actor_position.cell;
 
     for tile in &mut map.tiles {
         tile.visible = false;
@@ -80,7 +80,7 @@ pub fn recalculate_fov_for_player(
             if delta.x.abs().max(delta.y.abs()) > vision_range as i32 {
                 continue;
             }
-            if line_of_sight(map, spatial, player_position.level, origin, cell) {
+            if line_of_sight(map, spatial, actor_position.level, origin, cell) {
                 if let Some(tile) = map.tile_mut(cell) {
                     tile.visible = true;
                     tile.explored = true;
@@ -100,9 +100,9 @@ pub fn recalculate_fov(
         With<crate::actor::components::ControlledActor>,
     >,
 ) {
-    let Some((player_position, vision)) = player.iter().next() else {
+    let Some((actor_position, vision)) = player.iter().next() else {
         return;
     };
 
-    recalculate_fov_for_player(&mut map, &spatial, *player_position, vision.range);
+    recalculate_fov_for_actor(&mut map, &spatial, *actor_position, vision.range);
 }

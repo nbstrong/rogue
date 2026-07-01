@@ -30,7 +30,7 @@ The project uses a Cargo workspace with three primary crates:
 │ Window · input · rendering · UI · audio      │
 │ Asset loading · save-file I/O                │
 └───────────────────┬──────────────────────────┘
-                    │ PlayerIntent
+                    │ ActorIntent
                     │ presentation queries
                     ▼
 ┌──────────────────────────────────────────────┐

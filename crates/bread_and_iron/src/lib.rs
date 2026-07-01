@@ -17,7 +17,7 @@ use tactical_sim::item::effects::EffectQueue;
 use tactical_sim::persistence::rng::RandomStreams;
 use tactical_sim::simulation::{SimulationDriverState, SimulationStatus};
 use tactical_sim::time::clock::{CurrentActor, TurnClock};
-use tactical_sim::world::fov::recalculate_fov_for_player;
+use tactical_sim::world::fov::recalculate_fov_for_actor;
 use tactical_sim::world::generation::generate_one_room_with_rng;
 use tactical_sim::world::map::{GridPosition, LevelId, LevelMap};
 use tactical_sim::world::spatial::SpatialIndex;
@@ -160,7 +160,7 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
         .iter(world)
         .next()
     {
-        recalculate_fov_for_player(
+        recalculate_fov_for_actor(
             &mut map,
             &spatial,
             GridPosition {
