@@ -18,7 +18,9 @@ use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
 use crate::world::spatial::{SpatialIndex, update_spatial_index};
 use serde::{Deserialize, Serialize};
-use sim_core::{Cadence, DeterministicDriver, DomainWorkId, FrameAction, SimulationWorkBudget};
+use sim_core::{
+    Cadence, DeterministicDriver, DomainWorkId, DueWork, FrameAction, SimulationWorkBudget,
+};
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimulationStep;
@@ -130,6 +132,22 @@ impl DomainSimulationState {
         }
     }
 
+    pub fn enqueue_work(
+        &mut self,
+        cadence: Cadence,
+        due_minute: u64,
+        sequence: u64,
+        id: DomainWorkId,
+    ) {
+        self.driver.enqueue(DueWork {
+            cadence,
+            due_minute,
+            sequence,
+            id,
+            domain_event_cost: 1,
+        });
+    }
+
     pub fn clear_request(&mut self) {
         self.request.set_target_minute(None);
         self.driver.set_pending_target_minute(None);
@@ -141,10 +159,6 @@ impl DomainSimulationState {
 
     pub fn has_scheduled_domain_work(&self) -> bool {
         !self.driver.backlog.is_empty()
-    }
-
-    pub fn has_active_domain_work(&self) -> bool {
-        self.has_active_domain_request()
     }
 }
 
@@ -265,21 +279,6 @@ pub fn drive_simulation(world: &mut World) {
         (final_target, frame_target)
     };
 
-    let current_minute = world
-        .resource::<SimulationDriverState>()
-        .driver
-        .clock
-        .minute;
-    if frame_target <= current_minute {
-        let mut domain_state = world.resource_mut::<SimulationDriverState>();
-        if current_minute >= final_target {
-            domain_state.clear_request();
-        } else {
-            domain_state.driver.set_pending_target_minute(None);
-        }
-        return;
-    }
-
     let mut domain_state = world.resource_mut::<SimulationDriverState>();
     domain_state.driver.budget = SimulationWorkBudget {
         maximum_steps_per_frame: remaining_steps,
@@ -294,6 +293,10 @@ pub fn drive_simulation(world: &mut World) {
     let _ = domain_state
         .driver
         .run_frame_controlled(|_, work| {
+            assert_eq!(
+                work.domain_event_cost, 1,
+                "domain work must emit exactly one event"
+            );
             event_log.push(DomainWorkEvent {
                 cadence: work.cadence,
                 due_minute: work.due_minute,

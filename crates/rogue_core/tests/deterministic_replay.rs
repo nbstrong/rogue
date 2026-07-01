@@ -472,29 +472,24 @@ fn configure_domain_work(app: &mut App, speed: SimSpeed, target: u64) {
     driver
         .request_advance(target)
         .expect("domain request should be valid");
-    driver.driver.replace_backlog([
-        sim_core::DueWork {
-            cadence: sim_core::Cadence::Day,
-            due_minute: 5,
-            sequence: 2,
-            id: DomainWorkId::new(3).expect("domain work id"),
-            domain_event_cost: 1,
-        },
-        sim_core::DueWork {
-            cadence: sim_core::Cadence::Hour,
-            due_minute: 10,
-            sequence: 1,
-            id: DomainWorkId::new(2).expect("domain work id"),
-            domain_event_cost: 1,
-        },
-        sim_core::DueWork {
-            cadence: sim_core::Cadence::Minute,
-            due_minute: 10,
-            sequence: 0,
-            id: DomainWorkId::new(1).expect("domain work id"),
-            domain_event_cost: 1,
-        },
-    ]);
+    driver.enqueue_work(
+        sim_core::Cadence::Day,
+        5,
+        2,
+        DomainWorkId::new(3).expect("domain work id"),
+    );
+    driver.enqueue_work(
+        sim_core::Cadence::Hour,
+        10,
+        1,
+        DomainWorkId::new(2).expect("domain work id"),
+    );
+    driver.enqueue_work(
+        sim_core::Cadence::Minute,
+        10,
+        0,
+        DomainWorkId::new(1).expect("domain work id"),
+    );
 }
 
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
@@ -647,7 +642,7 @@ fn snapshot_roundtrip_continues_a_partially_processed_simulation() {
 #[test]
 fn replay_is_invariant_across_frame_budgets() {
     let fixture = load_fixture();
-    let (slow, slow_log) = run_replay_with_budget_metrics(&fixture, 1_024, 1);
+    let (slow, slow_log) = run_replay_with_budget_metrics(&fixture, 1, 1_024);
     let (fast, fast_log) = run_replay_with_budget_metrics(&fixture, 1_024, 1_024);
 
     assert_eq!(slow, fast);
@@ -711,22 +706,18 @@ fn future_backlog_remains_dormant_after_the_current_request_completes() {
         state
             .request_advance(5)
             .expect("initial request should be valid");
-        state.driver.replace_backlog([
-            sim_core::DueWork {
-                cadence: sim_core::Cadence::Day,
-                due_minute: 5,
-                sequence: 2,
-                id: DomainWorkId::new(3).expect("domain work id"),
-                domain_event_cost: 1,
-            },
-            sim_core::DueWork {
-                cadence: sim_core::Cadence::Hour,
-                due_minute: 10,
-                sequence: 1,
-                id: DomainWorkId::new(2).expect("domain work id"),
-                domain_event_cost: 1,
-            },
-        ]);
+        state.enqueue_work(
+            sim_core::Cadence::Day,
+            5,
+            2,
+            DomainWorkId::new(3).expect("domain work id"),
+        );
+        state.enqueue_work(
+            sim_core::Cadence::Hour,
+            10,
+            1,
+            DomainWorkId::new(2).expect("domain work id"),
+        );
     }
 
     rogue_core::drive_simulation(app.world_mut());
@@ -807,6 +798,72 @@ fn combined_tactical_and_domain_work_share_the_step_budget() {
 }
 
 #[test]
+fn current_minute_requests_process_all_due_work_without_losing_the_request() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    {
+        let mut state = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        state.driver.clock.set_speed(SimSpeed::VeryFast);
+        state
+            .request_advance(0)
+            .expect("current-minute request should be valid");
+        state.enqueue_work(
+            sim_core::Cadence::Minute,
+            0,
+            0,
+            DomainWorkId::new(1).expect("domain work id"),
+        );
+        state.enqueue_work(
+            sim_core::Cadence::Hour,
+            0,
+            1,
+            DomainWorkId::new(2).expect("domain work id"),
+        );
+    }
+
+    set_simulation_budget(&mut app, 1, 1);
+    rogue_core::drive_simulation(app.world_mut());
+
+    let interrupted = snapshot_world(app.world()).expect("interrupted snapshot");
+    assert_eq!(interrupted.simulation_driver.driver.clock.minute, 0);
+    assert!(
+        interrupted
+            .simulation_driver
+            .request
+            .target_minute()
+            .is_some()
+    );
+    assert_eq!(interrupted.simulation_driver.event_log.len(), 1);
+
+    set_simulation_budget(&mut app, 1, 1);
+    drain_simulation(&mut app);
+
+    let final_snapshot = snapshot_world(app.world()).expect("final snapshot");
+    assert_eq!(final_snapshot.simulation_driver.driver.clock.minute, 0);
+    assert!(
+        final_snapshot
+            .simulation_driver
+            .request
+            .target_minute()
+            .is_none()
+    );
+    assert!(final_snapshot.simulation_driver.driver.backlog.is_empty());
+    assert_eq!(
+        final_snapshot
+            .simulation_driver
+            .event_log
+            .iter()
+            .map(|event| event.id.raw())
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+}
+
+#[test]
 fn request_rejection_and_snapshot_request_window_invariants() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
@@ -844,6 +901,41 @@ fn request_rejection_and_snapshot_request_window_invariants() {
 
     let err = snapshot_world(app.world()).expect_err("invalid request window");
     assert!(err.contains("pending target cannot exceed"));
+}
+
+#[test]
+fn invalid_domain_work_panics_before_it_can_execute() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for declared_cost in [0, 2] {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut app = App::new();
+            app.add_plugins(SimulationPlugin);
+            initialize_world(&mut app, 0);
+
+            {
+                let mut state = app
+                    .world_mut()
+                    .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+                state.driver.clock.set_speed(SimSpeed::VeryFast);
+                state.request_advance(0).expect("request should be valid");
+                state.driver.enqueue(sim_core::DueWork {
+                    cadence: sim_core::Cadence::Minute,
+                    due_minute: 0,
+                    sequence: 0,
+                    id: DomainWorkId::new(7).expect("domain work id"),
+                    domain_event_cost: declared_cost,
+                });
+            }
+
+            rogue_core::drive_simulation(app.world_mut());
+        }));
+
+        assert!(
+            result.is_err(),
+            "declared cost {declared_cost} should be rejected during execution"
+        );
+    }
 }
 
 #[test]
@@ -912,7 +1004,27 @@ fn domain_work_roundtrip_preserves_partial_progress_and_event_order() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, 0);
-    configure_domain_work(&mut app, SimSpeed::Normal, 40);
+    {
+        let mut state = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        state.driver.clock.set_speed(SimSpeed::VeryFast);
+        state
+            .request_advance(10)
+            .expect("domain request should be valid");
+        state.enqueue_work(
+            sim_core::Cadence::Minute,
+            10,
+            0,
+            DomainWorkId::new(1).expect("domain work id"),
+        );
+        state.enqueue_work(
+            sim_core::Cadence::Hour,
+            10,
+            1,
+            DomainWorkId::new(2).expect("domain work id"),
+        );
+    }
     set_simulation_budget(&mut app, 1, 1);
 
     rogue_core::drive_simulation(app.world_mut());
@@ -985,13 +1097,12 @@ fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
         let mut driver = app
             .world_mut()
             .resource_mut::<rogue_core::simulation::SimulationDriverState>();
-        driver.driver.enqueue(sim_core::DueWork {
-            cadence: sim_core::Cadence::Hour,
-            due_minute: 12,
-            sequence: 99,
-            id: DomainWorkId::new(5).expect("domain work id"),
-            domain_event_cost: 1,
-        });
+        driver.enqueue_work(
+            sim_core::Cadence::Hour,
+            12,
+            99,
+            DomainWorkId::new(5).expect("domain work id"),
+        );
     }
 
     let snapshot = snapshot_world(app.world()).expect("snapshot");
