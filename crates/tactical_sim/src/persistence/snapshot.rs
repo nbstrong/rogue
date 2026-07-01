@@ -165,10 +165,8 @@ pub struct PersistentIdAllocatorSnapshot {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SimulationStatusSnapshot {
-    #[serde(alias = "WaitingForPlayer")]
     AwaitingInput,
     Resolving,
-    #[serde(alias = "GameOver")]
     Terminal,
 }
 
@@ -197,14 +195,11 @@ pub struct EntitySnapshot {
     pub id: u64,
     pub prototype: String,
     pub actor: bool,
-    #[serde(alias = "player")]
     pub controlled_actor: bool,
-    #[serde(alias = "monster")]
     pub hostile_actor: bool,
     pub item: bool,
     pub blocks_movement: bool,
     pub blocks_sight: bool,
-    #[serde(alias = "hostile_to_player")]
     pub hostile: bool,
     pub position: Option<SavedPosition>,
     pub health: Option<SavedHealth>,
@@ -214,7 +209,6 @@ pub struct EntitySnapshot {
     pub inventory: Option<SavedInventory>,
     pub carried_by: Option<u64>,
     pub ai_goal: Option<AiGoalSnapshot>,
-    #[serde(alias = "last_known_player_position")]
     pub last_known_target_position: Option<SavedLastKnownTargetPosition>,
     #[serde(default)]
     pub active_statuses: Vec<StatusEffect>,

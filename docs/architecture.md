@@ -638,9 +638,9 @@ use bevy_ecs::prelude::*;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimulationStatus {
-    WaitingForPlayer,
+    AwaitingInput,
     Resolving,
-    GameOver,
+    Terminal,
 }
 
 pub fn drive_simulation(world: &mut World) {
@@ -662,8 +662,8 @@ pub fn drive_simulation(world: &mut World) {
 
 The simulation runs until:
 
-- It requires another player action
-- The game ends
+- It requires another controlled actor action
+- The simulation reaches a terminal state
 - The safety limit detects a likely infinite loop
 
 ### 10.4 Timeline-Based Scheduling

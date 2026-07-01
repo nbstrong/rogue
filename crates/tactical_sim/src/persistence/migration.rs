@@ -3,12 +3,85 @@ use serde::{Deserialize, Serialize};
 use crate::persistence::rng::RandomSnapshot;
 use crate::persistence::snapshot::{
     ActionSnapshot, EffectSnapshot, EntitySnapshot, GameSnapshot, LevelSnapshot,
-    PersistentIdAllocatorSnapshot, ScheduledActorSnapshot, SimulationStatusSnapshot,
+    PersistentIdAllocatorSnapshot, SavedActionSpeed, SavedCombatStats, SavedHealth, SavedInventory,
+    SavedLastKnownTargetPosition, SavedPosition, SavedVision, ScheduledActorSnapshot,
+    SimulationStatusSnapshot,
 };
 use crate::simulation::SimulationDriverState;
 use sim_core::persistence::version::CURRENT_SCHEMA_VERSION;
 
 pub const CURRENT_SAVE_VERSION: u32 = CURRENT_SCHEMA_VERSION;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LegacySimulationStatusSnapshot {
+    WaitingForPlayer,
+    Resolving,
+    GameOver,
+}
+
+impl From<LegacySimulationStatusSnapshot> for SimulationStatusSnapshot {
+    fn from(value: LegacySimulationStatusSnapshot) -> Self {
+        match value {
+            LegacySimulationStatusSnapshot::WaitingForPlayer => Self::AwaitingInput,
+            LegacySimulationStatusSnapshot::Resolving => Self::Resolving,
+            LegacySimulationStatusSnapshot::GameOver => Self::Terminal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LegacyEntitySnapshot {
+    pub id: u64,
+    pub prototype: String,
+    pub actor: bool,
+    pub player: bool,
+    pub monster: bool,
+    pub item: bool,
+    pub blocks_movement: bool,
+    pub blocks_sight: bool,
+    pub hostile_to_player: bool,
+    pub position: Option<SavedPosition>,
+    pub health: Option<SavedHealth>,
+    pub combat_stats: Option<SavedCombatStats>,
+    pub vision: Option<SavedVision>,
+    pub action_speed: Option<SavedActionSpeed>,
+    pub inventory: Option<SavedInventory>,
+    pub carried_by: Option<u64>,
+    pub ai_goal: Option<crate::persistence::snapshot::AiGoalSnapshot>,
+    pub last_known_player_position: Option<SavedLastKnownTargetPosition>,
+    #[serde(default)]
+    pub active_statuses: Vec<crate::actor::combat::StatusEffect>,
+}
+
+impl From<LegacyEntitySnapshot> for EntitySnapshot {
+    fn from(value: LegacyEntitySnapshot) -> Self {
+        Self {
+            id: value.id,
+            prototype: match value.prototype.as_str() {
+                "player" => "controlled_actor".to_string(),
+                "ogre" => "hostile_actor".to_string(),
+                other => other.to_string(),
+            },
+            actor: value.actor,
+            controlled_actor: value.player,
+            hostile_actor: value.monster,
+            item: value.item,
+            blocks_movement: value.blocks_movement,
+            blocks_sight: value.blocks_sight,
+            hostile: value.hostile_to_player,
+            position: value.position,
+            health: value.health,
+            combat_stats: value.combat_stats,
+            vision: value.vision,
+            action_speed: value.action_speed,
+            inventory: value.inventory,
+            carried_by: value.carried_by,
+            ai_goal: value.ai_goal,
+            last_known_target_position: value.last_known_player_position,
+            active_statuses: value.active_statuses,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LegacyGameSnapshotV1 {
@@ -17,10 +90,10 @@ pub struct LegacyGameSnapshotV1 {
     pub current_level: u32,
     pub current_tick: u64,
     pub current_actor: Option<u64>,
-    pub simulation_status: SimulationStatusSnapshot,
+    pub simulation_status: LegacySimulationStatusSnapshot,
     pub persistent_ids: PersistentIdAllocatorSnapshot,
     pub levels: Vec<LevelSnapshot>,
-    pub entities: Vec<EntitySnapshot>,
+    pub entities: Vec<LegacyEntitySnapshot>,
     pub timeline: Vec<ScheduledActorSnapshot>,
     pub pending_actions: Vec<ActionSnapshot>,
     pub pending_effects: Vec<EffectSnapshot>,
@@ -35,10 +108,10 @@ pub struct LegacyGameSnapshotV2 {
     pub current_tick: u64,
     pub next_sequence: u64,
     pub current_actor: Option<u64>,
-    pub simulation_status: SimulationStatusSnapshot,
+    pub simulation_status: LegacySimulationStatusSnapshot,
     pub persistent_ids: PersistentIdAllocatorSnapshot,
     pub levels: Vec<LevelSnapshot>,
-    pub entities: Vec<EntitySnapshot>,
+    pub entities: Vec<LegacyEntitySnapshot>,
     pub timeline: Vec<ScheduledActorSnapshot>,
     pub pending_actions: Vec<ActionSnapshot>,
     pub pending_effects: Vec<EffectSnapshot>,
@@ -76,11 +149,11 @@ fn migrate_v2_snapshot(snapshot: LegacyGameSnapshotV2) -> Result<GameSnapshot, S
     match snapshot.version {
         2 => {
             let current_tick = snapshot.current_tick;
-            let simulation_status = snapshot.simulation_status;
+            let simulation_status = snapshot.simulation_status.into();
             let timeline = snapshot.timeline;
             let simulation_driver =
                 snapshot_driver_from_legacy(current_tick, simulation_status, &timeline)?;
-            let entities = normalize_legacy_entities(snapshot.entities);
+            let entities = snapshot.entities.into_iter().map(Into::into).collect();
             Ok(GameSnapshot {
                 version: CURRENT_SAVE_VERSION,
                 root_seed: snapshot.root_seed,
@@ -111,7 +184,7 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
     match snapshot.version {
         1 => {
             let current_tick = snapshot.current_tick;
-            let simulation_status = snapshot.simulation_status;
+            let simulation_status = snapshot.simulation_status.into();
             let timeline = snapshot.timeline;
             let next_sequence = timeline
                 .iter()
@@ -121,7 +194,7 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
                 .unwrap_or(0);
             let simulation_driver =
                 snapshot_driver_from_legacy(current_tick, simulation_status, &timeline)?;
-            let entities = normalize_legacy_entities(snapshot.entities);
+            let entities = snapshot.entities.into_iter().map(Into::into).collect();
 
             Ok(GameSnapshot {
                 version: CURRENT_SAVE_VERSION,
@@ -158,15 +231,4 @@ fn snapshot_driver_from_legacy(
     simulation_driver.driver.progress = Default::default();
     simulation_driver.driver.backlog.clear();
     Ok(simulation_driver)
-}
-
-fn normalize_legacy_entities(mut entities: Vec<EntitySnapshot>) -> Vec<EntitySnapshot> {
-    for entity in &mut entities {
-        entity.prototype = match entity.prototype.as_str() {
-            "player" => "controlled_actor".to_string(),
-            "ogre" => "hostile_actor".to_string(),
-            other => other.to_string(),
-        };
-    }
-    entities
 }
