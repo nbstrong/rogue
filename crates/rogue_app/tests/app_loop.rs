@@ -1,3 +1,4 @@
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy_math::IVec2;
@@ -430,6 +431,56 @@ fn extra_presentation_updates_do_not_change_the_authoritative_snapshot() {
 
     assert_eq!(before, after);
     assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn interleaved_presentation_updates_do_not_change_the_authoritative_turn_sequence() {
+    let mut baseline = build_app();
+    let mut noisy = build_app();
+
+    let play_move = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Numpad6);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::Numpad6);
+    };
+    let noise = |app: &mut App, updates: usize| {
+        for _ in 0..updates {
+            let _ = app.world_mut().run_system_once(
+                rogue_app::presentation::synchronization::synchronize_presentation,
+            );
+        }
+    };
+
+    baseline.update();
+    baseline.update();
+    baseline.update();
+    baseline.update();
+    play_move(&mut baseline);
+    noise(&mut baseline, 1);
+    play_move(&mut baseline);
+    noise(&mut baseline, 1);
+
+    noisy.update();
+    noisy.update();
+    noisy.update();
+    noisy.update();
+    play_move(&mut noisy);
+    noise(&mut noisy, 3);
+    play_move(&mut noisy);
+    noise(&mut noisy, 1);
+
+    let baseline_snapshot = snapshot_world(baseline.world()).expect("baseline snapshot");
+    let noisy_snapshot = snapshot_world(noisy.world()).expect("noisy snapshot");
+
+    assert_eq!(baseline_snapshot, noisy_snapshot);
+    assert_eq!(
+        snapshot_digest(&baseline_snapshot).expect("baseline digest"),
+        snapshot_digest(&noisy_snapshot).expect("noisy digest")
+    );
 }
 
 #[test]

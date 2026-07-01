@@ -591,6 +591,14 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     }
     if snapshot
         .simulation_driver
+        .request
+        .target_minute
+        .is_some_and(|target| target < snapshot.simulation_driver.driver.clock.minute)
+    {
+        return Err("simulation driver request target cannot precede its clock".to_string());
+    }
+    if snapshot
+        .simulation_driver
         .driver
         .backlog
         .entries()
@@ -826,13 +834,15 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
 
     for work in snapshot.simulation_driver.driver.backlog.entries() {
         if work.id.raw() == 0 {
-            return Err("simulation driver backlog contains invalid actor id 0".to_string());
+            return Err("simulation driver backlog contains invalid domain work id 0".to_string());
         }
-        if !actor_ids.contains(&work.id.raw()) {
-            return Err(format!(
-                "simulation driver backlog references missing actor {}",
-                work.id.raw()
-            ));
+    }
+
+    for event in &snapshot.simulation_driver.event_log {
+        if event.id.raw() == 0 {
+            return Err(
+                "simulation driver event log contains invalid domain work id 0".to_string(),
+            );
         }
     }
 

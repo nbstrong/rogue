@@ -18,7 +18,7 @@ use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
 use crate::world::spatial::{SpatialIndex, update_spatial_index};
 use serde::{Deserialize, Serialize};
-use sim_core::{DeterministicDriver, DomainWorkId, FrameAction, SimulationWorkBudget};
+use sim_core::{Cadence, DeterministicDriver, DomainWorkId, FrameAction, SimulationWorkBudget};
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimulationStep;
@@ -48,16 +48,54 @@ impl Default for SimulationStatus {
     }
 }
 
-#[derive(Resource, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SimulationDriverState {
-    pub driver: DeterministicDriver<DomainWorkId>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DomainAdvanceRequest {
+    pub target_minute: Option<u64>,
 }
 
-impl Default for SimulationDriverState {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DomainWorkEvent {
+    pub cadence: Cadence,
+    pub due_minute: u64,
+    pub sequence: u64,
+    pub id: DomainWorkId,
+}
+
+#[derive(Resource, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DomainSimulationState {
+    pub driver: DeterministicDriver<DomainWorkId>,
+    #[serde(default)]
+    pub request: DomainAdvanceRequest,
+    #[serde(default)]
+    pub event_log: Vec<DomainWorkEvent>,
+}
+
+pub type SimulationDriverState = DomainSimulationState;
+
+impl Default for DomainSimulationState {
     fn default() -> Self {
         Self {
             driver: DeterministicDriver::default(),
+            request: DomainAdvanceRequest::default(),
+            event_log: Vec::new(),
         }
+    }
+}
+
+impl DomainSimulationState {
+    pub fn request_advance(&mut self, target_minute: u64) {
+        self.request.target_minute = Some(target_minute);
+        self.driver.set_pending_target_minute(Some(target_minute));
+    }
+
+    pub fn clear_request(&mut self) {
+        self.request.target_minute = None;
+    }
+
+    pub fn has_active_domain_work(&self) -> bool {
+        self.request.target_minute.is_some()
+            || self.driver.pending_target_minute().is_some()
+            || !self.driver.backlog.is_empty()
     }
 }
 
@@ -116,36 +154,74 @@ impl Plugin for SimulationPlugin {
 }
 
 pub fn drive_simulation(world: &mut World) {
-    let continuing = world
+    let status = *world.resource::<SimulationStatus>();
+    let has_active_domain = world
         .resource::<SimulationDriverState>()
-        .driver
-        .pending_target_minute()
-        .is_some();
-    if *world.resource::<SimulationStatus>() != SimulationStatus::Resolving && !continuing {
+        .has_active_domain_work();
+    let has_tactical_work = status == SimulationStatus::Resolving;
+    if !has_tactical_work && !has_active_domain {
         return;
     }
     let budget = *world.resource::<SimulationWorkBudget>();
-    let mut tactical_steps_remaining = budget.maximum_steps_per_frame;
-    while tactical_steps_remaining > 0
-        && *world.resource::<SimulationStatus>() == SimulationStatus::Resolving
-    {
-        world.run_schedule(SimulationStep);
-        tactical_steps_remaining -= 1;
+    if has_tactical_work {
+        let mut tactical_steps_remaining = budget.maximum_steps_per_frame;
+        while tactical_steps_remaining > 0
+            && *world.resource::<SimulationStatus>() == SimulationStatus::Resolving
+        {
+            world.run_schedule(SimulationStep);
+            tactical_steps_remaining -= 1;
+        }
+
+        if tactical_steps_remaining == 0 && !has_active_domain {
+            return;
+        }
     }
 
-    let mut driver_state = world.resource_mut::<SimulationDriverState>();
-    if driver_state.driver.pending_target_minute().is_some()
-        || !driver_state.driver.backlog.is_empty()
+    if world
+        .resource::<SimulationDriverState>()
+        .driver
+        .clock
+        .is_paused()
     {
-        driver_state.driver.budget = SimulationWorkBudget {
-            maximum_steps_per_frame: tactical_steps_remaining,
-            maximum_domain_events_per_frame: budget.maximum_domain_events_per_frame,
-        };
-        driver_state.driver.begin_frame();
-        let _ = driver_state
-            .driver
-            .run_frame_controlled(|_, work| FrameAction::Continue(work.domain_event_cost))
-            .expect("domain driver should not exceed its configured budget");
+        return;
+    }
+
+    let target = world
+        .resource::<SimulationDriverState>()
+        .request
+        .target_minute
+        .or_else(|| {
+            world
+                .resource::<SimulationDriverState>()
+                .driver
+                .pending_target_minute()
+        });
+    let Some(target) = target else {
+        return;
+    };
+
+    let mut domain_state = world.resource_mut::<SimulationDriverState>();
+    domain_state.driver.budget = budget;
+    domain_state.driver.begin_frame();
+    domain_state.driver.set_pending_target_minute(Some(target));
+    let mut event_log = Vec::new();
+    std::mem::swap(&mut event_log, &mut domain_state.event_log);
+    let _ = domain_state
+        .driver
+        .run_frame_controlled(|_, work| {
+            event_log.push(DomainWorkEvent {
+                cadence: work.cadence,
+                due_minute: work.due_minute,
+                sequence: work.sequence,
+                id: work.id,
+            });
+            FrameAction::Continue(work.domain_event_cost)
+        })
+        .expect("domain driver should not exceed its configured budget");
+    domain_state.event_log = event_log;
+
+    if domain_state.driver.pending_target_minute().is_none() {
+        domain_state.clear_request();
     }
 }
 

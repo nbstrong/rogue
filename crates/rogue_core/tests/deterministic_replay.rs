@@ -347,6 +347,7 @@ fn run_replay_with_budget(
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, fixture.seed);
+    configure_domain_work(&mut app, SimSpeed::Normal, 40);
     set_simulation_budget(
         &mut app,
         maximum_steps_per_frame,
@@ -417,11 +418,7 @@ fn run_replay_with_speed(fixture: &ReplayFixture, speed: SimSpeed) -> GameSnapsh
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, fixture.seed);
-    app.world_mut()
-        .resource_mut::<rogue_core::simulation::SimulationDriverState>()
-        .driver
-        .clock
-        .set_speed(speed);
+    configure_domain_work(&mut app, speed, 40);
 
     let monster = {
         let world = app.world_mut();
@@ -456,6 +453,38 @@ fn projected_snapshot_without_speed(snapshot: &GameSnapshot) -> GameSnapshot {
     projected
 }
 
+fn configure_domain_work(app: &mut App, speed: SimSpeed, target: u64) {
+    let mut driver = app
+        .world_mut()
+        .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+    driver.driver.clock.set_speed(speed);
+    driver.request.target_minute = Some(target);
+    driver.driver.set_pending_target_minute(Some(target));
+    driver.driver.replace_backlog([
+        sim_core::DueWork {
+            cadence: sim_core::Cadence::Day,
+            due_minute: 5,
+            sequence: 2,
+            id: DomainWorkId::new(3).expect("domain work id"),
+            domain_event_cost: 1,
+        },
+        sim_core::DueWork {
+            cadence: sim_core::Cadence::Hour,
+            due_minute: 10,
+            sequence: 1,
+            id: DomainWorkId::new(2).expect("domain work id"),
+            domain_event_cost: 1,
+        },
+        sim_core::DueWork {
+            cadence: sim_core::Cadence::Minute,
+            due_minute: 10,
+            sequence: 0,
+            id: DomainWorkId::new(1).expect("domain work id"),
+            domain_event_cost: 1,
+        },
+    ]);
+}
+
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
@@ -478,12 +507,11 @@ fn set_simulation_budget(
 fn drain_simulation(app: &mut App) {
     for _ in 0..512 {
         let status = *app.world().resource::<SimulationStatus>();
-        let pending = app
+        let active_domain = app
             .world()
             .resource::<rogue_core::simulation::SimulationDriverState>()
-            .driver
-            .pending_target_minute();
-        if pending.is_none() && status != SimulationStatus::Resolving {
+            .has_active_domain_work();
+        if status != SimulationStatus::Resolving && !active_domain {
             return;
         }
 
@@ -582,7 +610,7 @@ fn snapshot_roundtrip_continues_a_partially_processed_simulation() {
 #[test]
 fn replay_is_invariant_across_frame_budgets() {
     let fixture = load_fixture();
-    let slow = run_replay_with_budget(&fixture, 1, 1);
+    let slow = run_replay_with_budget(&fixture, 1_024, 1);
     let fast = run_replay_with_budget(&fixture, 1_024, 1_024);
 
     assert_eq!(slow, fast);
@@ -606,6 +634,34 @@ fn replay_is_invariant_across_simulation_speeds() {
         snapshot_digest(&projected_snapshot_without_speed(&normal)).expect("normal digest"),
         snapshot_digest(&projected_snapshot_without_speed(&very_fast)).expect("very fast digest")
     );
+}
+
+#[test]
+fn domain_work_is_paused_until_the_request_is_resumed() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    configure_domain_work(&mut app, SimSpeed::Paused, 40);
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    rogue_core::drive_simulation(app.world_mut());
+    let paused = snapshot_world(app.world()).expect("paused snapshot");
+
+    assert_eq!(before, paused);
+
+    {
+        let mut driver = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        driver.driver.clock.set_speed(SimSpeed::VeryFast);
+    }
+
+    drain_simulation(&mut app);
+
+    let resumed = snapshot_world(app.world()).expect("resumed snapshot");
+    assert!(resumed.simulation_driver.event_log.len() >= 3);
+    assert!(resumed.simulation_driver.request.target_minute.is_none());
 }
 
 #[test]
@@ -642,6 +698,59 @@ fn legacy_snapshot_v2_is_migrated() {
 }
 
 #[test]
+fn domain_work_roundtrip_preserves_partial_progress_and_event_order() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+    configure_domain_work(&mut app, SimSpeed::Normal, 40);
+    set_simulation_budget(&mut app, 1, 1);
+
+    rogue_core::drive_simulation(app.world_mut());
+
+    let interrupted_snapshot = snapshot_world(app.world()).expect("interrupted snapshot");
+    let mut restored_app = restore_app_from_snapshot(&interrupted_snapshot);
+
+    set_simulation_budget(&mut app, 1_024, 1_024);
+    set_simulation_budget(&mut restored_app, 1_024, 1_024);
+
+    drain_simulation(&mut app);
+    drain_simulation(&mut restored_app);
+
+    let original_final = snapshot_world(app.world()).expect("original final snapshot");
+    let restored_final = snapshot_world(restored_app.world()).expect("restored final snapshot");
+
+    assert_eq!(original_final, restored_final);
+    assert_eq!(
+        snapshot_digest(&original_final).expect("original final digest"),
+        snapshot_digest(&restored_final).expect("restored final digest")
+    );
+    assert_eq!(
+        original_final.simulation_driver.event_log,
+        restored_final.simulation_driver.event_log
+    );
+}
+
+#[test]
+fn domain_work_orders_by_due_minute_then_cadence_then_sequence() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+    configure_domain_work(&mut app, SimSpeed::VeryFast, 40);
+
+    drain_simulation(&mut app);
+
+    let snapshot = snapshot_world(app.world()).expect("domain snapshot");
+    let processed_ids: Vec<_> = snapshot
+        .simulation_driver
+        .event_log
+        .iter()
+        .map(|event| event.id.raw())
+        .collect();
+
+    assert_eq!(processed_ids, vec![3, 1, 2]);
+}
+
+#[test]
 fn version_two_current_shape_is_upgraded() {
     let snapshot = run_replay(&load_fixture());
     let mut legacy_shape = snapshot.clone();
@@ -670,7 +779,7 @@ fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
             cadence: sim_core::Cadence::Hour,
             due_minute: 12,
             sequence: 99,
-            id: DomainWorkId::new(1).expect("domain work id"),
+            id: DomainWorkId::new(5).expect("domain work id"),
             domain_event_cost: 2,
         });
     }

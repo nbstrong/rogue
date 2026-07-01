@@ -215,12 +215,7 @@ impl<Id: Ord + Copy + Eq + Serialize> Serialize for DeterministicDriver<Id> {
     {
         let snapshot = DeterministicDriverSnapshot {
             clock: self.clock,
-            backlog: self
-                .backlog
-                .entries()
-                .into_iter()
-                .filter(|work| work.cadence != Cadence::Tactical)
-                .collect(),
+            backlog: self.backlog.entries(),
             pending_target_minute: self.pending_target_minute,
         };
         let mut state = serializer.serialize_struct("DeterministicDriver", 3)?;
@@ -266,9 +261,6 @@ impl<Id: Ord + Copy + Eq> DeterministicDriver<Id> {
 
     pub fn begin_frame(&mut self) {
         self.progress = WorkBudgetProgress::default();
-        if self.pending_target_minute.is_none() {
-            self.pending_target_minute = Some(self.target_minute());
-        }
     }
 
     pub fn target_minute(&self) -> u64 {

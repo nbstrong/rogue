@@ -436,7 +436,12 @@ fn insert_occupant(
 }
 
 fn drive_simulation_if_resolving(world: &mut World) {
-    if world.resource::<SimulationStatus>() == &SimulationStatus::Resolving {
+    let should_drive = world.resource::<SimulationStatus>() == &SimulationStatus::Resolving
+        || world
+            .resource::<SimulationDriverState>()
+            .has_active_domain_work();
+
+    if should_drive {
         rogue_core::drive_simulation(world);
     }
 

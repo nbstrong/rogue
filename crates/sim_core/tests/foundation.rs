@@ -297,16 +297,23 @@ fn driver_roundtrip_preserves_semantic_state() {
     };
     driver.clock.speed = SimSpeed::Normal;
     driver.enqueue(DueWork {
-        cadence: Cadence::Minute,
+        cadence: Cadence::Tactical,
         due_minute: 0,
         sequence: 0,
-        id: 1,
+        id: 9,
         domain_event_cost: 1,
     });
     driver.enqueue(DueWork {
         cadence: Cadence::Minute,
         due_minute: 1,
         sequence: 1,
+        id: 1,
+        domain_event_cost: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 4,
+        sequence: 2,
         id: 2,
         domain_event_cost: 1,
     });
@@ -364,6 +371,37 @@ fn driver_roundtrip_preserves_semantic_state() {
         restored.backlog.peek().map(|work| work.id),
         uninterrupted.backlog.peek().map(|work| work.id)
     );
+}
+
+#[test]
+fn driver_roundtrip_preserves_all_backlog_entries() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.enqueue(DueWork {
+        cadence: Cadence::Tactical,
+        due_minute: 0,
+        sequence: 0,
+        id: 9,
+        domain_event_cost: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 1,
+        id: 1,
+        domain_event_cost: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 4,
+        sequence: 2,
+        id: 2,
+        domain_event_cost: 1,
+    });
+
+    let encoded = ron::to_string(&driver).expect("driver snapshot");
+    let restored: DeterministicDriver<u64> = ron::from_str(&encoded).expect("driver restore");
+
+    assert_eq!(restored.backlog.entries(), driver.backlog.entries());
 }
 
 #[test]
