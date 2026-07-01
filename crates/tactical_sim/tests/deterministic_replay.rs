@@ -15,6 +15,8 @@ use tactical_sim::actor::components::{
     StableActorId, StableItemId, Vision,
 };
 use tactical_sim::actor::spawn::spawn_vertical_slice;
+use tactical_sim::content::definitions::{ItemDefinition, ItemUseEffect};
+use tactical_sim::content::registry::ContentRegistry;
 use tactical_sim::item::components::{Inventory, Item};
 use tactical_sim::item::effects::{Effect, EffectQueue, apply_pending_effects};
 use tactical_sim::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
@@ -145,6 +147,24 @@ fn build_stable_entity_index(world: &mut World) {
 
 fn initialize_world(app: &mut App, seed: u64) {
     app.world_mut().insert_resource(RandomStreams::seeded(seed));
+    let mut content = ContentRegistry::default();
+    content
+        .insert_item(ItemDefinition {
+            id: "healing_potion".to_string(),
+            name: "healing potion".to_string(),
+            glyph: '!',
+            use_effect: Some(ItemUseEffect::Heal { amount: 3 }),
+        })
+        .expect("insert healing potion definition");
+    content
+        .insert_item(ItemDefinition {
+            id: "trinket".to_string(),
+            name: "trinket".to_string(),
+            glyph: '?',
+            use_effect: None,
+        })
+        .expect("insert trinket definition");
+    app.world_mut().insert_resource(content);
     let map = {
         let mut rng = app.world_mut().resource_mut::<RandomStreams>();
         generate_one_room_with_rng(7, 7, Some(&mut *rng))

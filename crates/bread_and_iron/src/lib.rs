@@ -9,7 +9,7 @@ use tactical_sim::actor::components::{
     HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
     StableActorId, StableEntityIndex, StableItemId, Vision,
 };
-use tactical_sim::content::definitions::ActorDefinition;
+use tactical_sim::content::definitions::{ActorDefinition, ItemDefinition, ItemUseEffect};
 use tactical_sim::content::registry::ContentRegistry;
 use tactical_sim::item::components::{Inventory, Item};
 use tactical_sim::item::effects::EffectQueue;
@@ -204,6 +204,29 @@ pub fn register_content(
             .insert_actor(actor)
             .unwrap_or_else(|error| panic!("{}", error));
     }
+
+    for item in default_item_definitions() {
+        registry
+            .insert_item(item)
+            .unwrap_or_else(|error| panic!("{}", error));
+    }
+}
+
+fn default_item_definitions() -> impl IntoIterator<Item = ItemDefinition> {
+    [
+        ItemDefinition {
+            id: "healing_potion".to_string(),
+            name: "healing potion".to_string(),
+            glyph: '!',
+            use_effect: Some(ItemUseEffect::Heal { amount: 3 }),
+        },
+        ItemDefinition {
+            id: "trinket".to_string(),
+            name: "trinket".to_string(),
+            glyph: '?',
+            use_effect: None,
+        },
+    ]
 }
 
 fn spawn_actor(

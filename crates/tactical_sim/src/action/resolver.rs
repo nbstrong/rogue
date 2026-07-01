@@ -9,6 +9,8 @@ use crate::actor::components::{
     ActionSpeed, ActorId, BlocksMovement, CombatStats, Health, Monster, Player, PrototypeId,
     StableActorId, StableEntityIndex,
 };
+use crate::content::definitions::ItemUseEffect;
+use crate::content::registry::ContentRegistry;
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
 use crate::persistence::rng::RandomStreams;
@@ -363,6 +365,7 @@ pub fn resolve_action(
             Option<&StableActorId>,
         ),
     >,
+    content: Option<Res<'_, ContentRegistry>>,
     speeds: Query<'_, '_, &ActionSpeed>,
     mut inventories: Query<'_, '_, &mut Inventory>,
     current_actor: Option<Res<'_, crate::time::clock::CurrentActor>>,
@@ -752,13 +755,11 @@ pub fn resolve_action(
                 });
                 return;
             };
-            let prototype = positions
-                .get(item_entity)
-                .ok()
-                .and_then(|(_, _, _, _, _, _, _, _, _, _, prototype, _)| {
-                    prototype.map(|prototype| prototype.0.clone())
-                })
-                .unwrap_or_else(|| "unknown".to_string());
+            let item_prototype = positions.get(item_entity).ok().and_then(
+                |(_, _, _, _, _, _, _, _, _, _, prototype, _)| {
+                    prototype.as_ref().map(|prototype| prototype.0.clone())
+                },
+            );
             inventory.items.remove(index);
             commands.entity(item_entity).despawn();
 
@@ -768,7 +769,18 @@ pub fn resolve_action(
                 _ => false,
             };
             if use_target_is_self {
-                let amount = if prototype == "healing_potion" { 3 } else { 1 };
+                let amount = content
+                    .as_ref()
+                    .and_then(|registry| {
+                        item_prototype.as_ref().and_then(|prototype| {
+                            registry.items.get(prototype).and_then(|definition| {
+                                definition.use_effect.as_ref().map(|effect| match effect {
+                                    ItemUseEffect::Heal { amount } => *amount,
+                                })
+                            })
+                        })
+                    })
+                    .unwrap_or(1);
                 effects.0.push_back(Effect::Heal {
                     target: action.actor,
                     amount,

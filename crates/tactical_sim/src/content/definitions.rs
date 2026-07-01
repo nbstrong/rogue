@@ -1,4 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ItemUseEffect {
+    Heal { amount: i32 },
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActorDefinition {
@@ -12,9 +17,11 @@ pub struct ActorDefinition {
     pub action_speed: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemDefinition {
     pub id: String,
     pub name: String,
     pub glyph: char,
+    #[serde(default)]
+    pub use_effect: Option<ItemUseEffect>,
 }
