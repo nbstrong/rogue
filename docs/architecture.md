@@ -14,10 +14,11 @@ The design emphasizes:
 - Data-driven content
 - Stable save-game persistence
 
-The project uses a Cargo workspace with two primary crates:
+The project uses a Cargo workspace with three primary crates:
 
-- `rogue_core`: deterministic simulation and game rules
-- `rogue_app`: Bevy application, rendering, input, UI, audio, and platform integration
+- `tactical_sim`: deterministic simulation and game rules
+- `bread_and_iron`: headless game composition and scenario bootstrap
+- `bread_and_iron_app`: Bevy application, rendering, input, UI, audio, and platform integration
 
 ---
 
@@ -25,7 +26,7 @@ The project uses a Cargo workspace with two primary crates:
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ rogue_app                                    │
+│ bread_and_iron_app                         │
 │ Window · input · rendering · UI · audio      │
 │ Asset loading · save-file I/O                │
 └───────────────────┬──────────────────────────┘
@@ -33,7 +34,7 @@ The project uses a Cargo workspace with two primary crates:
                     │ presentation queries
                     ▼
 ┌──────────────────────────────────────────────┐
-│ rogue_core                                   │
+│ tactical_sim                         │
 │ Deterministic Bevy ECS simulation            │
 │ Map · actors · actions · combat · AI         │
 │ Items · effects · FOV · generation · saves   │
@@ -142,7 +143,7 @@ traditional-roguelike/
 │       ├── items.ron
 │       └── levels.ron
 ├── crates/
-│   ├── rogue_core/
+│   ├── tactical_sim/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
@@ -183,7 +184,7 @@ traditional-roguelike/
 │   │           ├── mod.rs
 │   │           ├── snapshot.rs
 │   │           └── migration.rs
-│   └── rogue_app/
+│   └── bread_and_iron_app/
 │       ├── Cargo.toml
 │       └── src/
 │           ├── main.rs
@@ -226,8 +227,8 @@ Begin with these two crates. Additional crates should be introduced only after a
 ```toml
 [workspace]
 members = [
-    "crates/rogue_core",
-    "crates/rogue_app",
+    "crates/tactical_sim",
+    "crates/bread_and_iron_app",
 ]
 resolver = "3"
 
@@ -248,10 +249,10 @@ The core crate should depend only on the Bevy subcrates it needs. The applicatio
 A typical dependency direction is:
 
 ```text
-rogue_app ──depends on──► rogue_core
+bread_and_iron_app ──depends on──► tactical_sim
 ```
 
-`rogue_core` must never depend on `rogue_app`.
+`tactical_sim` must never depend on `bread_and_iron_app`.
 
 ---
 
@@ -1071,7 +1072,7 @@ Migrations operate on serialized domain snapshots rather than live ECS state.
 
 ```rust
 use bevy::prelude::*;
-use rogue_core::SimulationPlugin;
+use tactical_sim::SimulationPlugin;
 
 fn main() {
     App::new()

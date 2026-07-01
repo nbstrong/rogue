@@ -109,11 +109,11 @@ Temporary adapters must not become the permanent public API.
 The starting architecture has two principal crates:
 
 ```text
-rogue_app
-    └── depends on rogue_core
+bread_and_iron_app
+    └── depends on tactical_sim
 ```
 
-`rogue_core` currently owns:
+`tactical_sim` currently owns:
 
 - A single dense `LevelMap`
 - Tactical actors represented as ECS entities
@@ -127,7 +127,7 @@ rogue_app
 - Content definitions
 - Save snapshots
 
-`rogue_app` currently owns:
+`bread_and_iron_app` currently owns:
 
 - Keyboard input
 - Camera and rendering
@@ -2043,7 +2043,7 @@ Acceptance:
 - A formation can produce tactical representatives and fold battle results back.
 - Conservation tests pass.
 
-### 19.10 Rename `rogue_app` to `game_app`
+### 19.10 Rename `bread_and_iron_app` to `game_app`
 
 Perform the application rename last, after dependencies are stable.
 
@@ -2273,22 +2273,22 @@ Use this as the initial mapping from the original layout.
 
 | Original path | Target |
 |---|---|
-| `rogue_core/src/time/*` | `sim_core/src/time.rs`, `schedule.rs`, and `work_budget.rs` |
-| `rogue_core/src/persistence/migration.rs` | `sim_core/src/persistence/migration.rs` |
-| `rogue_core/src/world/map.rs` | `world_model/src/map_catalog.rs` and `map_stack.rs` |
-| `rogue_core/src/world/tile.rs` | `world_model/src/layers/terrain.rs` and `structures.rs` |
-| `rogue_core/src/world/spatial.rs` | `world_model/src/spatial/` |
-| `rogue_core/src/world/fov.rs` | `tactical_sim/src/fov/` |
-| `rogue_core/src/world/generation.rs` | Initially `tactical_sim`, later map-kind-specific generation modules |
-| `rogue_core/src/action/*` | `tactical_sim/src/action/` |
-| `rogue_core/src/actor/*` | `tactical_sim/src/actor/` |
-| `rogue_core/src/item/*` | `tactical_sim` initially; shared inventories may later move to domain modules |
-| `rogue_core/src/content/*` | Split between domain definition crates and `game_app` asset loading |
-| `rogue_app/src/presentation/*` | `presentation`, `renderer_ascii`, and `renderer_tiles` |
-| `rogue_app/src/input/*` | `game_app/src/input/` |
-| `rogue_app/src/ui/*` | `game_app/src/ui/` |
-| `rogue_app/src/assets/*` | `game_app/src/assets/` |
-| `rogue_app/src/persistence/*` | `game_app/src/save_files/` |
+| `tactical_sim/src/time/*` | `sim_core/src/time.rs`, `schedule.rs`, and `work_budget.rs` |
+| `tactical_sim/src/persistence/migration.rs` | `sim_core/src/persistence/migration.rs` |
+| `tactical_sim/src/world/map.rs` | `world_model/src/map_catalog.rs` and `map_stack.rs` |
+| `tactical_sim/src/world/tile.rs` | `world_model/src/layers/terrain.rs` and `structures.rs` |
+| `tactical_sim/src/world/spatial.rs` | `world_model/src/spatial/` |
+| `tactical_sim/src/world/fov.rs` | `tactical_sim/src/fov/` |
+| `tactical_sim/src/world/generation.rs` | Initially `tactical_sim`, later map-kind-specific generation modules |
+| `tactical_sim/src/action/*` | `tactical_sim/src/action/` |
+| `tactical_sim/src/actor/*` | `tactical_sim/src/actor/` |
+| `tactical_sim/src/item/*` | `tactical_sim` initially; shared inventories may later move to domain modules |
+| `tactical_sim/src/content/*` | Split between domain definition crates and `game_app` asset loading |
+| `bread_and_iron_app/src/presentation/*` | `presentation`, `renderer_ascii`, and `renderer_tiles` |
+| `bread_and_iron_app/src/input/*` | `game_app/src/input/` |
+| `bread_and_iron_app/src/ui/*` | `game_app/src/ui/` |
+| `bread_and_iron_app/src/assets/*` | `game_app/src/assets/` |
+| `bread_and_iron_app/src/persistence/*` | `game_app/src/save_files/` |
 
 Do not move files mechanically without first separating their domain and renderer dependencies.
 

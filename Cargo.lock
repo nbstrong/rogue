@@ -1798,6 +1798,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "bread_and_iron"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_math",
+ "tactical_sim",
+]
+
+[[package]]
+name = "bread_and_iron_app"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_math",
+ "bread_and_iron",
+ "ron 0.8.1",
+ "tactical_sim",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4007,38 +4029,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
-name = "rogue"
-version = "0.1.0"
-dependencies = [
- "rogue_core",
-]
-
-[[package]]
-name = "rogue_app"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_app",
- "bevy_ecs",
- "bevy_math",
- "rogue_core",
- "ron 0.8.1",
-]
-
-[[package]]
-name = "rogue_core"
-version = "0.1.0"
-dependencies = [
- "bevy_app",
- "bevy_ecs",
- "bevy_math",
- "blake3",
- "ron 0.8.1",
- "serde",
- "sim_core",
-]
-
-[[package]]
 name = "ron"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4403,6 +4393,19 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-kit",
  "windows",
+]
+
+[[package]]
+name = "tactical_sim"
+version = "0.1.0"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_math",
+ "blake3",
+ "ron 0.8.1",
+ "serde",
+ "sim_core",
 ]
 
 [[package]]
