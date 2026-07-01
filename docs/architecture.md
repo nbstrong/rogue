@@ -77,7 +77,7 @@ Rendering and animation may represent simulation results, but they must never de
 
 ### 3.2 Input Produces Actions
 
-Player input and AI decisions produce the same domain-level `Action` values.
+Controlled-actor input and AI decisions produce the same domain-level `Action` values.
 
 Neither input systems nor AI systems directly:
 
@@ -352,10 +352,10 @@ use bevy_ecs::prelude::*;
 pub struct Actor;
 
 #[derive(Component)]
-pub struct Player;
+pub struct ControlledActor;
 
 #[derive(Component)]
-pub struct Monster;
+pub struct HostileActor;
 
 #[derive(Component)]
 pub struct BlocksMovement;
@@ -396,7 +396,7 @@ Components should remain:
 - Domain-oriented
 - Independently queryable
 
-Avoid monolithic components such as `MonsterData` that combine health, position, AI, rendering, and inventory.
+Avoid monolithic components such as `ActorData` that combine health, position, AI, rendering, and inventory.
 
 ---
 
@@ -803,10 +803,10 @@ use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 
 #[derive(Component)]
-pub struct HostileToPlayer;
+pub struct Hostile;
 
 #[derive(Component)]
-pub struct LastKnownPlayerPosition {
+pub struct LastKnownTargetPosition {
     pub level: LevelId,
     pub cell: IVec2,
     pub observed_at: u64,
@@ -823,7 +823,7 @@ pub enum AiGoal {
 }
 ```
 
-AI must emit the same `Action` type used by the player.
+AI must emit the same `Action` type used by the controlled actor.
 
 AI must not bypass:
 
@@ -843,18 +843,18 @@ Field of view is derived simulation state.
 A typical visibility update performs:
 
 1. Clear current visibility for the active level.
-2. Compute visible cells from the player's position.
+2. Compute visible cells from the controlled actor's position.
 3. Mark those cells as visible.
 4. Mark visible cells as explored.
 5. Notify the presentation layer that map visibility changed.
 
 Visibility should be recalculated when:
 
-- The player moves
+- The controlled actor moves
 - Sight-blocking terrain changes
 - Sight-blocking entities move
 - Vision range changes
-- The player changes levels
+- The controlled actor changes levels
 
 The renderer may apply presentation rules such as:
 
@@ -1120,7 +1120,7 @@ Recommended top-level plugins:
 |---|---|
 | `SimulationPlugin` | Turn scheduling, actions, combat, AI, effects |
 | `AssetPlugin` | Loading and validating static content |
-| `InputPlugin` | Mapping platform input to player intentions |
+| `InputPlugin` | Mapping platform input to actor intentions |
 | `PresentationPlugin` | Map and actor visualization |
 | `GameUiPlugin` | HUD, inventory, targeting, combat log |
 | `SavePlugin` | File I/O and snapshot orchestration |
@@ -1190,7 +1190,7 @@ Useful debug validations include:
 - No actor outside map bounds
 - No duplicate persistent IDs
 - All referenced entities exist
-- Player count is exactly one during active play
+- Controlled-actor count is exactly one during active play
 
 ---
 
@@ -1205,8 +1205,8 @@ fn walking_into_enemy_becomes_melee_attack() {
     app.add_plugins(SimulationPlugin);
 
     // Insert a small test map.
-    // Spawn player and monster.
-    // Queue movement toward the monster.
+    // Spawn a controlled actor and a hostile actor.
+    // Queue movement toward the hostile actor.
     // Run SimulationStep.
     // Assert positions and health.
 }
