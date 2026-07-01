@@ -1,8 +1,6 @@
 use bevy_app::App;
 use bevy_math::IVec2;
-use bread_and_iron::Player;
-use tactical_sim::actor::components::Vision;
-use tactical_sim::actor::components::{BlocksSight, PersistentId};
+use tactical_sim::actor::components::{BlocksSight, ControlledActor, PersistentId, Vision};
 use tactical_sim::simulation::SimulationPlugin;
 use tactical_sim::simulation::SimulationStep;
 use tactical_sim::world::fov::recalculate_fov_for_player;
@@ -181,5 +179,5 @@ fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
         app.world().resource::<SpatialIndex>().sight_blockers.len(),
         1
     );
-    assert!(app.world().entity(player).contains::<Player>());
+    assert!(app.world().entity(player).contains::<ControlledActor>());
 }

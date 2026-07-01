@@ -9,7 +9,6 @@ pub enum ItemUseEffect {
 pub struct ActorDefinition {
     pub id: String,
     pub name: String,
-    pub glyph: char,
     pub maximum_health: i32,
     pub power: i32,
     pub defense: i32,
@@ -21,7 +20,6 @@ pub struct ActorDefinition {
 pub struct ItemDefinition {
     pub id: String,
     pub name: String,
-    pub glyph: char,
     #[serde(default)]
     pub use_effect: Option<ItemUseEffect>,
 }

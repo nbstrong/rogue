@@ -218,7 +218,7 @@ traditional-roguelike/
     └── deterministic_replay.rs
 ```
 
-Begin with these two crates. Additional crates should be introduced only after a domain boundary has demonstrated independent versioning, testing, or reuse needs.
+Begin with these crates. Additional crates should be introduced only after a domain boundary has demonstrated independent versioning, testing, or reuse needs.
 
 ---
 
@@ -227,7 +227,9 @@ Begin with these two crates. Additional crates should be introduced only after a
 ```toml
 [workspace]
 members = [
+    "crates/sim_core",
     "crates/tactical_sim",
+    "crates/bread_and_iron",
     "crates/bread_and_iron_app",
 ]
 resolver = "3"
@@ -928,7 +930,6 @@ use serde::Deserialize;
 pub struct ActorDefinition {
     pub id: String,
     pub name: String,
-    pub glyph: char,
     pub maximum_health: i32,
     pub power: i32,
     pub defense: i32,

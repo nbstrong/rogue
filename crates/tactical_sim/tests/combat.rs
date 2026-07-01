@@ -1,7 +1,6 @@
 use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
-use bread_and_iron::{Player, generate_ai_action};
 use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::action::resolver::{ActionFailure, ActionOutcome, ActionOutcomeLog};
@@ -16,6 +15,9 @@ use tactical_sim::time::clock::TurnClock;
 use tactical_sim::world::generation::generate_one_room;
 use tactical_sim::world::map::{GridPosition, LevelId};
 use tactical_sim::world::spatial::SpatialIndex;
+
+mod support;
+use support::generate_ai_action;
 
 fn build_app() -> App {
     let mut app = App::new();
@@ -102,7 +104,7 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         .world_mut()
         .spawn((
             Actor,
-            tactical_sim::actor::components::ControlledActor,
+            ControlledActor,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -132,10 +134,10 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         .world_mut()
         .spawn((
             Actor,
-            tactical_sim::actor::components::HostileActor,
+            HostileActor,
             BlocksMovement,
             BlocksSight,
-            tactical_sim::actor::components::Hostile,
+            Hostile,
             Health {
                 current: 10,
                 maximum: 10,
@@ -930,7 +932,7 @@ fn identical_input_sequences_produce_identical_state() {
         let player = app
             .world()
             .iter_entities()
-            .find_map(|entity_ref| entity_ref.get::<Player>().map(|_| entity_ref.id()))
+            .find_map(|entity_ref| entity_ref.get::<ControlledActor>().map(|_| entity_ref.id()))
             .expect("player");
         schedule_actor!(app, player, 0);
         push_action!(

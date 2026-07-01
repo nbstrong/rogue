@@ -80,6 +80,7 @@ fn migrate_v2_snapshot(snapshot: LegacyGameSnapshotV2) -> Result<GameSnapshot, S
             let timeline = snapshot.timeline;
             let simulation_driver =
                 snapshot_driver_from_legacy(current_tick, simulation_status, &timeline)?;
+            let entities = normalize_legacy_entities(snapshot.entities);
             Ok(GameSnapshot {
                 version: CURRENT_SAVE_VERSION,
                 root_seed: snapshot.root_seed,
@@ -90,7 +91,7 @@ fn migrate_v2_snapshot(snapshot: LegacyGameSnapshotV2) -> Result<GameSnapshot, S
                 simulation_status,
                 persistent_ids: snapshot.persistent_ids,
                 levels: snapshot.levels,
-                entities: snapshot.entities,
+                entities,
                 timeline,
                 pending_actions: snapshot.pending_actions,
                 pending_effects: snapshot.pending_effects,
@@ -120,6 +121,7 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
                 .unwrap_or(0);
             let simulation_driver =
                 snapshot_driver_from_legacy(current_tick, simulation_status, &timeline)?;
+            let entities = normalize_legacy_entities(snapshot.entities);
 
             Ok(GameSnapshot {
                 version: CURRENT_SAVE_VERSION,
@@ -131,7 +133,7 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
                 simulation_status,
                 persistent_ids: snapshot.persistent_ids,
                 levels: snapshot.levels,
-                entities: snapshot.entities,
+                entities,
                 timeline,
                 pending_actions: snapshot.pending_actions,
                 pending_effects: snapshot.pending_effects,
@@ -156,4 +158,15 @@ fn snapshot_driver_from_legacy(
     simulation_driver.driver.progress = Default::default();
     simulation_driver.driver.backlog.clear();
     Ok(simulation_driver)
+}
+
+fn normalize_legacy_entities(mut entities: Vec<EntitySnapshot>) -> Vec<EntitySnapshot> {
+    for entity in &mut entities {
+        entity.prototype = match entity.prototype.as_str() {
+            "player" => "controlled_actor".to_string(),
+            "ogre" => "hostile_actor".to_string(),
+            other => other.to_string(),
+        };
+    }
+    entities
 }

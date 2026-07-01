@@ -8,5 +8,5 @@
         Move(dx: 1, dy: 0),
         Wait,
     ],
-    expected_digest: "644e793407b3f89b289f1fa282ea85c3382cf47d1149394bde44a56e9822008b",
+    expected_digest: "78cce28e8bbb5d828c7186bc87cef3a81b777c0848e04fcd0d4254919ce0b364",
 )

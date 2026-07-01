@@ -2,7 +2,6 @@
     (
         id: "player",
         name: "Player",
-        glyph: '@',
         maximum_health: 10,
         power: 3,
         defense: 1,
@@ -12,7 +11,6 @@
     (
         id: "ogre",
         name: "Ogre",
-        glyph: 'O',
         maximum_health: 6,
         power: 2,
         defense: 0,
@@ -20,4 +18,3 @@
         action_speed: 120,
     ),
 ]
-

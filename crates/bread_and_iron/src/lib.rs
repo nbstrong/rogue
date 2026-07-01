@@ -304,13 +304,11 @@ fn default_item_definitions() -> impl IntoIterator<Item = ItemDefinition> {
         ItemDefinition {
             id: "healing_potion".to_string(),
             name: "healing potion".to_string(),
-            glyph: '!',
             use_effect: Some(ItemUseEffect::Heal { amount: 3 }),
         },
         ItemDefinition {
             id: "trinket".to_string(),
             name: "trinket".to_string(),
-            glyph: '?',
             use_effect: None,
         },
     ]

@@ -1,15 +1,14 @@
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
-
-use crate::action::intent::{Action, ActionKind};
-use crate::action::queue::ActionQueue;
-use crate::actor::components::{
+use tactical_sim::action::intent::{Action, ActionKind};
+use tactical_sim::action::queue::ActionQueue;
+use tactical_sim::actor::components::{
     ControlledActor, Hostile, HostileActor, StableActorId, StableEntityIndex,
 };
-use crate::persistence::rng::RandomStreams;
-use crate::time::clock::CurrentActor;
-use crate::world::map::GridPosition;
-use crate::world::spatial::SpatialIndex;
+use tactical_sim::persistence::rng::RandomStreams;
+use tactical_sim::time::clock::CurrentActor;
+use tactical_sim::world::map::GridPosition;
+use tactical_sim::world::spatial::SpatialIndex;
 
 fn step_toward(from: IVec2, to: IVec2) -> IVec2 {
     IVec2::new((to.x - from.x).signum(), (to.y - from.y).signum())
@@ -38,10 +37,10 @@ pub fn generate_ai_action(
     if queue.contains_actor(current_actor_id) {
         return;
     }
-    let Some((player_position, player_stable_id)) = controlled_actors.iter().next() else {
+    let Some((controlled_position, controlled_stable_id)) = controlled_actors.iter().next() else {
         return;
     };
-    let Some(_player_entity) = stable_index.actor(player_stable_id.0) else {
+    let Some(_controlled_entity) = stable_index.actor(controlled_stable_id.0) else {
         return;
     };
 
@@ -54,16 +53,16 @@ pub fn generate_ai_action(
         };
 
         let roll = rng.next_ai_u64();
-        let delta = player_position.cell - position.cell;
+        let delta = controlled_position.cell - position.cell;
         if delta.x.abs().max(delta.y.abs()) == 1 {
             queue.push(Action {
                 actor: stable_id.0,
                 kind: ActionKind::Melee {
-                    target: player_stable_id.0,
+                    target: controlled_stable_id.0,
                 },
             });
         } else {
-            let movement = step_toward(position.cell, player_position.cell);
+            let movement = step_toward(position.cell, controlled_position.cell);
             if movement != IVec2::ZERO {
                 if roll & 1 == 0 {
                     let destination = position.cell + movement;

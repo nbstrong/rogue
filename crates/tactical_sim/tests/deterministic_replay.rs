@@ -2,7 +2,6 @@ use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 use bevy_math::IVec2;
-use bread_and_iron::{Monster, Player, generate_ai_action};
 use serde::Deserialize;
 
 use sim_core::{DomainWorkId, PresentationRng, SimSpeed};
@@ -11,10 +10,10 @@ use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::actor::combat::StatusEffect;
 use tactical_sim::actor::components::{
-    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
-    PersistentId, PersistentIdAllocator, PrototypeId, StableActorId, StableItemId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, ControlledActor,
+    Health, Hostile, HostileActor, PersistentId, PersistentIdAllocator, PrototypeId, StableActorId,
+    StableItemId, Vision,
 };
-use tactical_sim::actor::spawn::spawn_vertical_slice;
 use tactical_sim::content::definitions::{ItemDefinition, ItemUseEffect};
 use tactical_sim::content::registry::ContentRegistry;
 use tactical_sim::item::components::{Inventory, Item};
@@ -36,6 +35,9 @@ use tactical_sim::world::generation::generate_one_room_with_rng;
 use tactical_sim::world::map::{GridPosition, LevelId, LevelMap};
 use tactical_sim::world::spatial::SpatialIndex;
 use tactical_sim::world::tile::TileKind;
+
+mod support;
+use support::generate_ai_action;
 
 #[derive(Debug, Clone, Deserialize)]
 struct ReplayFixture {
@@ -146,6 +148,83 @@ fn build_stable_entity_index(world: &mut World) {
     world.insert_resource(index);
 }
 
+fn spawn_vertical_slice(
+    commands: &mut Commands<'_, '_>,
+    allocator: &mut PersistentIdAllocator,
+) -> (Entity, Entity) {
+    let level = LevelId(0);
+    let player_persistent_id = allocator
+        .allocate()
+        .expect("persistent id allocator exhausted");
+    let player_stable_id =
+        tactical_sim::ActorId::new(player_persistent_id.0).expect("valid actor id");
+    let player = commands
+        .spawn((
+            Actor,
+            ControlledActor,
+            BlocksMovement,
+            BlocksSight,
+            Health {
+                current: 10,
+                maximum: 10,
+            },
+            ActiveStatuses::default(),
+            CombatStats {
+                power: 3,
+                defense: 1,
+            },
+            Vision { range: 8 },
+            ActionSpeed {
+                ticks_per_action: 100,
+            },
+            PrototypeId("controlled_actor".to_string()),
+            GridPosition {
+                level,
+                cell: IVec2::new(2, 2),
+            },
+            player_persistent_id,
+            StableActorId(player_stable_id),
+        ))
+        .id();
+
+    let monster_persistent_id = allocator
+        .allocate()
+        .expect("persistent id allocator exhausted");
+    let monster_stable_id =
+        tactical_sim::ActorId::new(monster_persistent_id.0).expect("valid actor id");
+    let monster = commands
+        .spawn((
+            Actor,
+            HostileActor,
+            Hostile,
+            BlocksMovement,
+            BlocksSight,
+            Health {
+                current: 6,
+                maximum: 6,
+            },
+            ActiveStatuses::default(),
+            CombatStats {
+                power: 2,
+                defense: 0,
+            },
+            Vision { range: 8 },
+            ActionSpeed {
+                ticks_per_action: 120,
+            },
+            PrototypeId("hostile_actor".to_string()),
+            GridPosition {
+                level,
+                cell: IVec2::new(5, 2),
+            },
+            monster_persistent_id,
+            StableActorId(monster_stable_id),
+        ))
+        .id();
+
+    (player, monster)
+}
+
 fn initialize_world(app: &mut App, seed: u64) {
     app.world_mut().insert_resource(RandomStreams::seeded(seed));
     let mut content = ContentRegistry::default();
@@ -153,7 +232,6 @@ fn initialize_world(app: &mut App, seed: u64) {
         .insert_item(ItemDefinition {
             id: "healing_potion".to_string(),
             name: "healing potion".to_string(),
-            glyph: '!',
             use_effect: Some(ItemUseEffect::Heal { amount: 3 }),
         })
         .expect("insert healing potion definition");
@@ -161,7 +239,6 @@ fn initialize_world(app: &mut App, seed: u64) {
         .insert_item(ItemDefinition {
             id: "trinket".to_string(),
             name: "trinket".to_string(),
-            glyph: '?',
             use_effect: None,
         })
         .expect("insert trinket definition");
@@ -207,7 +284,7 @@ fn initialize_world(app: &mut App, seed: u64) {
             tactical_sim::ActorId::new(player_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
             Actor,
-            tactical_sim::actor::components::ControlledActor,
+            ControlledActor,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -223,7 +300,7 @@ fn initialize_world(app: &mut App, seed: u64) {
             ActionSpeed {
                 ticks_per_action: 100,
             },
-            PrototypeId("player".to_string()),
+            PrototypeId("controlled_actor".to_string()),
             Inventory::new(4),
             GridPosition {
                 level: LevelId(0),
@@ -240,8 +317,8 @@ fn initialize_world(app: &mut App, seed: u64) {
             tactical_sim::ActorId::new(monster_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
             Actor,
-            tactical_sim::actor::components::HostileActor,
-            tactical_sim::actor::components::Hostile,
+            HostileActor,
+            Hostile,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -257,7 +334,7 @@ fn initialize_world(app: &mut App, seed: u64) {
             ActionSpeed {
                 ticks_per_action: 100,
             },
-            PrototypeId("ogre".to_string()),
+            PrototypeId("hostile_actor".to_string()),
             GridPosition {
                 level: LevelId(0),
                 cell: IVec2::new(5, 2),
@@ -299,7 +376,7 @@ fn initialize_world(app: &mut App, seed: u64) {
     let spatial = app.world().resource::<SpatialIndex>().clone();
     let player_position = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&GridPosition, &Vision), With<Player>>();
+        let mut query = world.query_filtered::<(&GridPosition, &Vision), With<ControlledActor>>();
         query
             .iter(world)
             .next()
@@ -318,7 +395,8 @@ fn initialize_world(app: &mut App, seed: u64) {
 fn drive_command(app: &mut App, command: &ActionKindSnapshot) {
     let player = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Player>>();
+        let mut query =
+            world.query_filtered::<(&PersistentId, &StableActorId), With<ControlledActor>>();
         let (_, stable_id) = query.iter(world).next().expect("player entity");
         stable_id.0
     };
@@ -342,7 +420,8 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
 
     let monster = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let mut query =
+            world.query_filtered::<(&PersistentId, &StableActorId), With<HostileActor>>();
         let (_, stable_id) = query.iter(world).next().expect("monster entity");
         stable_id.0
     };
@@ -388,7 +467,8 @@ fn run_replay_with_budget_metrics(
 
     let monster = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let mut query =
+            world.query_filtered::<(&PersistentId, &StableActorId), With<HostileActor>>();
         let (_, stable_id) = query.iter(world).next().expect("monster entity");
         stable_id.0
     };
@@ -427,7 +507,8 @@ fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> Game
 
     let monster = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let mut query =
+            world.query_filtered::<(&PersistentId, &StableActorId), With<HostileActor>>();
         let (_, stable_id) = query.iter(world).next().expect("monster entity");
         stable_id.0
     };
@@ -467,7 +548,8 @@ fn run_replay_with_speed_metrics(
 
     let monster = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let mut query =
+            world.query_filtered::<(&PersistentId, &StableActorId), With<HostileActor>>();
         let (_, stable_id) = query.iter(world).next().expect("monster entity");
         stable_id.0
     };
@@ -1312,7 +1394,8 @@ fn presentation_rng_consumption_does_not_change_the_authoritative_replay() {
 
     let monster = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let mut query =
+            world.query_filtered::<(&PersistentId, &StableActorId), With<HostileActor>>();
         let (_, stable_id) = query.iter(world).next().expect("monster entity");
         stable_id.0
     };
@@ -1696,12 +1779,12 @@ fn duplicate_stable_actor_ids_are_rejected() {
 
     let player_id = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<Entity, With<Player>>();
+        let mut query = world.query_filtered::<Entity, With<ControlledActor>>();
         query.iter(world).next().expect("player entity")
     };
     let monster_id = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<Entity, With<Monster>>();
+        let mut query = world.query_filtered::<Entity, With<HostileActor>>();
         query.iter(world).next().expect("monster entity")
     };
 
@@ -1829,7 +1912,7 @@ fn nonzero_level_ids_survive_restore_and_resave() {
     build_spatial_index(app.world_mut());
     let player_position = {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&GridPosition, &Vision), With<Player>>();
+        let mut query = world.query_filtered::<(&GridPosition, &Vision), With<ControlledActor>>();
         query
             .iter(world)
             .next()
@@ -1975,7 +2058,7 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
 
     let restored_player = {
         let world = restored_app.world_mut();
-        let mut query = world.query_filtered::<Entity, With<Player>>();
+        let mut query = world.query_filtered::<Entity, With<ControlledActor>>();
         query.iter(world).next().expect("restored player")
     };
     let restored_statuses = restored_app
