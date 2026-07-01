@@ -53,7 +53,7 @@ pub fn finish_simulation_step(
     clock: Res<'_, TurnClock>,
     queue: Res<'_, ActionQueue>,
     stable_index: Res<'_, StableEntityIndex>,
-    player: Query<'_, '_, &StableActorId, With<ControlledActor>>,
+    controlled_actors: Query<'_, '_, &StableActorId, With<ControlledActor>>,
     actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId)>,
     mut status: ResMut<'_, SimulationStatus>,
 ) {
@@ -62,15 +62,15 @@ pub fn finish_simulation_step(
     }
 
     current_actor.0 = None;
-    if *status == SimulationStatus::GameOver {
+    if *status == SimulationStatus::Terminal {
         return;
     }
     if let Some(next) = clock.peek_next() {
-        let player_is_next = player
+        let controlled_actor_is_next = controlled_actors
             .iter()
             .next()
             .is_some_and(|stable_id| stable_id.0 == next.actor);
-        if player_is_next {
+        if controlled_actor_is_next {
             if queue.contains_actor(next.actor) {
                 *status = SimulationStatus::Resolving;
                 return;

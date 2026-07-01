@@ -131,8 +131,8 @@ fn actor_flags(
         |(
             _,
             position,
-            player,
-            monster,
+            controlled_actor,
+            hostile_actor,
             health,
             blocks_movement,
             hostile,
@@ -144,8 +144,8 @@ fn actor_flags(
         )| {
             (
                 *position,
-                player.is_some(),
-                monster.is_some(),
+                controlled_actor.is_some(),
+                hostile_actor.is_some(),
                 health.copied(),
                 blocks_movement.is_some(),
                 hostile.is_some(),
@@ -836,8 +836,8 @@ fn target_flags(
         |(
             _,
             position,
-            player,
-            monster,
+            controlled_actor,
+            hostile_actor,
             health,
             blocks_movement,
             hostile,
@@ -849,8 +849,8 @@ fn target_flags(
         )| {
             (
                 *position,
-                player.is_some(),
-                monster.is_some(),
+                controlled_actor.is_some(),
+                hostile_actor.is_some(),
                 health.copied(),
                 blocks_movement.is_some(),
                 hostile.is_some(),

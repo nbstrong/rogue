@@ -20,7 +20,7 @@ pub fn update_hud(
         "HP {}/{}  Pos ({}, {})  {:?}",
         health.current, health.maximum, position.cell.x, position.cell.y, *status
     );
-    if *status == SimulationStatus::GameOver {
+    if *status == SimulationStatus::Terminal {
         message.push_str("  Game over. Press R to restart.");
     }
 

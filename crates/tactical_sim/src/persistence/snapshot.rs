@@ -168,7 +168,8 @@ pub enum SimulationStatusSnapshot {
     #[serde(alias = "WaitingForPlayer")]
     AwaitingInput,
     Resolving,
-    GameOver,
+    #[serde(alias = "GameOver")]
+    Terminal,
 }
 
 impl From<SimulationStatus> for SimulationStatusSnapshot {
@@ -176,7 +177,7 @@ impl From<SimulationStatus> for SimulationStatusSnapshot {
         match value {
             SimulationStatus::AwaitingInput => Self::AwaitingInput,
             SimulationStatus::Resolving => Self::Resolving,
-            SimulationStatus::GameOver => Self::GameOver,
+            SimulationStatus::Terminal => Self::Terminal,
         }
     }
 }
@@ -186,7 +187,7 @@ impl From<SimulationStatusSnapshot> for SimulationStatus {
         match value {
             SimulationStatusSnapshot::AwaitingInput => Self::AwaitingInput,
             SimulationStatusSnapshot::Resolving => Self::Resolving,
-            SimulationStatusSnapshot::GameOver => Self::GameOver,
+            SimulationStatusSnapshot::Terminal => Self::Terminal,
         }
     }
 }
@@ -1369,15 +1370,15 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
         .ok_or_else(|| "missing spatial index after rebuild".to_string())?;
     let mut controlled_query =
         world.query_filtered::<(&GridPosition, &Vision), With<ControlledActor>>();
-    let player_position = controlled_query
+    let controlled_actor_position = controlled_query
         .iter(world)
         .next()
         .map(|(position, vision)| (*position, *vision));
 
-    if let Some((player_position, vision)) = player_position
+    if let Some((controlled_position, vision)) = controlled_actor_position
         && let Some(mut map) = world.get_resource_mut::<LevelMap>()
     {
-        recalculate_fov_for_actor(&mut map, &spatial, player_position, vision.range);
+        recalculate_fov_for_actor(&mut map, &spatial, controlled_position, vision.range);
     }
 
     Ok(())

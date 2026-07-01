@@ -128,11 +128,11 @@ fn drive_simulation_if_resolving(world: &mut World) {
         .any(|health| health.current > 0);
     if !player_alive {
         if let Some(mut simulation) = world.get_resource_mut::<SimulationStatus>() {
-            *simulation = SimulationStatus::GameOver;
+            *simulation = SimulationStatus::Terminal;
         }
     }
 
-    if world.resource::<SimulationStatus>() == &SimulationStatus::GameOver {
+    if world.resource::<SimulationStatus>() == &SimulationStatus::Terminal {
         let state_is_game_over = world
             .get_resource::<State<AppState>>()
             .is_some_and(|state| state.get() == &AppState::GameOver);

@@ -40,7 +40,7 @@ pub enum SimulationSet {
 pub enum SimulationStatus {
     AwaitingInput,
     Resolving,
-    GameOver,
+    Terminal,
 }
 
 impl Default for SimulationStatus {

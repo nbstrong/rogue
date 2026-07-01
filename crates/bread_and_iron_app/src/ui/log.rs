@@ -9,7 +9,7 @@ pub fn flush_combat_log(
     status: Res<'_, SimulationStatus>,
 ) {
     let mut lines: Vec<_> = log.lines.iter().cloned().collect();
-    if *status == SimulationStatus::GameOver {
+    if *status == SimulationStatus::Terminal {
         lines.push("Game over. Press R to restart.".to_string());
     }
 
@@ -19,7 +19,7 @@ pub fn flush_combat_log(
         return;
     }
 
-    if *status != SimulationStatus::GameOver && log.lines.len() > 128 {
+    if *status != SimulationStatus::Terminal && log.lines.len() > 128 {
         while log.lines.len() > 128 {
             let _ = log.lines.pop_front();
         }
