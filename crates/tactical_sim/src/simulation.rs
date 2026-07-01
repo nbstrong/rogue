@@ -5,7 +5,6 @@ use std::cmp::Reverse;
 
 use crate::action::queue::ActionQueue;
 use crate::action::resolver::{ActionDecision, ActionOutcomeLog, resolve_action, validate_action};
-use crate::actor::ai::generate_ai_action;
 use crate::actor::components::{
     Actor, PersistentIdAllocator, StableActorId, StableEntityIndex, StableItemId,
 };
@@ -212,7 +211,6 @@ impl Plugin for SimulationPlugin {
                 SimulationStep,
                 (
                     select_next_actor.in_set(SimulationSet::SelectActor),
-                    generate_ai_action.in_set(SimulationSet::DecideAction),
                     validate_action.in_set(SimulationSet::Validate),
                     resolve_action.in_set(SimulationSet::Resolve),
                     apply_pending_effects.in_set(SimulationSet::ApplyEffects),

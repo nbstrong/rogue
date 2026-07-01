@@ -1,6 +1,7 @@
 use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
+use bread_and_iron::generate_ai_action;
 use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::action::resolver::{ActionFailure, ActionOutcome, ActionOutcomeLog};
@@ -19,6 +20,10 @@ use tactical_sim::world::spatial::SpatialIndex;
 fn build_app() -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(tactical_sim::simulation::SimulationSet::DecideAction),
+    );
     app
 }
 

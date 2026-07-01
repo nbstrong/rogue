@@ -2,6 +2,7 @@ use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 use bevy_math::IVec2;
+use bread_and_iron::generate_ai_action;
 use serde::Deserialize;
 
 use sim_core::{DomainWorkId, PresentationRng, SimSpeed};
@@ -27,7 +28,8 @@ use tactical_sim::persistence::snapshot::{
     snapshot_world,
 };
 use tactical_sim::simulation::{
-    DomainWorkError, DomainWorkEvent, SimulationPlugin, SimulationStatus,
+    DomainWorkError, DomainWorkEvent, SimulationPlugin, SimulationSet, SimulationStatus,
+    SimulationStep,
 };
 use tactical_sim::time::clock::{CurrentActor, TurnClock};
 use tactical_sim::world::fov::recalculate_fov_for_player;
@@ -333,6 +335,10 @@ fn drive_command(app: &mut App, command: &ActionKindSnapshot) {
 fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     initialize_world(&mut app, fixture.seed);
 
     let monster = {
@@ -349,7 +355,7 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
         sim_core::schedule::CurrentActor(Some(monster));
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     app.world_mut()
-        .run_system_once(tactical_sim::actor::ai::generate_ai_action)
+        .run_system_once(generate_ai_action)
         .expect("run ai system");
     tactical_sim::drive_simulation(app.world_mut());
     drain_simulation(&mut app);
@@ -369,6 +375,10 @@ fn run_replay_with_budget_metrics(
 ) -> (GameSnapshot, String) {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     initialize_world(&mut app, fixture.seed);
     configure_domain_work(&mut app, SimSpeed::Normal, 40);
     set_simulation_budget(
@@ -391,7 +401,7 @@ fn run_replay_with_budget_metrics(
         sim_core::schedule::CurrentActor(Some(monster));
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     app.world_mut()
-        .run_system_once(tactical_sim::actor::ai::generate_ai_action)
+        .run_system_once(generate_ai_action)
         .expect("run ai system");
     tactical_sim::drive_simulation(app.world_mut());
     drain_simulation(&mut app);
@@ -409,6 +419,10 @@ fn run_replay_with_budget_metrics(
 fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> GameSnapshot {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     app.world_mut().spawn_empty();
     initialize_world(&mut app, fixture.seed);
 
@@ -426,7 +440,7 @@ fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> Game
         sim_core::schedule::CurrentActor(Some(monster));
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     app.world_mut()
-        .run_system_once(tactical_sim::actor::ai::generate_ai_action)
+        .run_system_once(generate_ai_action)
         .expect("run ai system");
     tactical_sim::drive_simulation(app.world_mut());
     drain_simulation(&mut app);
@@ -445,6 +459,10 @@ fn run_replay_with_speed_metrics(
 ) -> (GameSnapshot, usize, String) {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     initialize_world(&mut app, fixture.seed);
     configure_domain_work(&mut app, speed, 40);
 
@@ -462,7 +480,7 @@ fn run_replay_with_speed_metrics(
         sim_core::schedule::CurrentActor(Some(monster));
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     app.world_mut()
-        .run_system_once(tactical_sim::actor::ai::generate_ai_action)
+        .run_system_once(generate_ai_action)
         .expect("run ai system");
     tactical_sim::drive_simulation(app.world_mut());
     let mut updates = 1 + drain_simulation_count(&mut app);
@@ -524,6 +542,10 @@ fn configure_domain_work(app: &mut App, speed: SimSpeed, target: u64) {
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     tactical_sim::persistence::snapshot::restore_world(app.world_mut(), snapshot)
         .expect("restore snapshot");
     app
@@ -644,6 +666,10 @@ fn snapshot_roundtrip_continues_a_partially_processed_simulation() {
 
     let mut interrupted = App::new();
     interrupted.add_plugins(SimulationPlugin);
+    interrupted.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     initialize_world(&mut interrupted, fixture.seed);
     set_simulation_budget(&mut interrupted, 1, 1);
 
@@ -1278,6 +1304,10 @@ fn presentation_rng_consumption_does_not_change_the_authoritative_replay() {
 
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
+    app.add_systems(
+        SimulationStep,
+        generate_ai_action.in_set(SimulationSet::DecideAction),
+    );
     initialize_world(&mut app, fixture.seed);
     let mut presentation_rng = PresentationRng::seeded(fixture.seed);
 
@@ -1295,7 +1325,7 @@ fn presentation_rng_consumption_does_not_change_the_authoritative_replay() {
         sim_core::schedule::CurrentActor(Some(monster));
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     app.world_mut()
-        .run_system_once(tactical_sim::actor::ai::generate_ai_action)
+        .run_system_once(generate_ai_action)
         .expect("run ai system");
     tactical_sim::drive_simulation(app.world_mut());
     drain_simulation(&mut app);

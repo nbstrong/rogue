@@ -4403,6 +4403,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_math",
  "blake3",
+ "bread_and_iron",
  "ron 0.8.1",
  "serde",
  "sim_core",

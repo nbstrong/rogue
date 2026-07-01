@@ -2,12 +2,14 @@ use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 use bevy_math::IVec2;
+use bread_and_iron::generate_ai_action;
 use tactical_sim::actor::components::Health;
 use tactical_sim::actor::components::{PersistentIdAllocator, Player};
 use tactical_sim::content::registry::ContentRegistry;
 use tactical_sim::persistence::rng::RandomStreams;
 use tactical_sim::simulation::SimulationDriverState;
 use tactical_sim::simulation::SimulationStatus;
+use tactical_sim::simulation::{SimulationSet, SimulationStep};
 use tactical_sim::world::map::LevelId;
 
 use crate::app_state::{AppState, CurrentInputMode};
@@ -66,6 +68,10 @@ impl Plugin for GamePlugin {
             .init_resource::<CurrentInputMode>()
             .init_resource::<PersistentIdAllocator>()
             .init_resource::<RandomStreams>()
+            .add_systems(
+                SimulationStep,
+                generate_ai_action.in_set(SimulationSet::DecideAction),
+            )
             .add_systems(Startup, bootstrap_game)
             .add_systems(
                 Update,
