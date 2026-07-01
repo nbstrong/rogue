@@ -14,10 +14,11 @@ The design emphasizes:
 - Data-driven content
 - Stable save-game persistence
 
-The project uses a Cargo workspace with two primary crates:
+The project uses a Cargo workspace with three primary crates:
 
-- `rogue_core`: deterministic simulation and game rules
-- `rogue_app`: Bevy application, rendering, input, UI, audio, and platform integration
+- `tactical_sim`: deterministic simulation and game rules
+- `bread_and_iron`: headless game composition and scenario bootstrap
+- `bread_and_iron_app`: Bevy application, rendering, input, UI, audio, and platform integration
 
 ---
 
@@ -25,15 +26,15 @@ The project uses a Cargo workspace with two primary crates:
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ rogue_app                                    │
+│ bread_and_iron_app                         │
 │ Window · input · rendering · UI · audio      │
 │ Asset loading · save-file I/O                │
 └───────────────────┬──────────────────────────┘
-                    │ PlayerIntent
+                    │ ActorIntent
                     │ presentation queries
                     ▼
 ┌──────────────────────────────────────────────┐
-│ rogue_core                                   │
+│ tactical_sim                         │
 │ Deterministic Bevy ECS simulation            │
 │ Map · actors · actions · combat · AI         │
 │ Items · effects · FOV · generation · saves   │
@@ -76,7 +77,7 @@ Rendering and animation may represent simulation results, but they must never de
 
 ### 3.2 Input Produces Actions
 
-Player input and AI decisions produce the same domain-level `Action` values.
+Controlled-actor input and AI decisions produce the same domain-level `Action` values.
 
 Neither input systems nor AI systems directly:
 
@@ -142,7 +143,7 @@ traditional-roguelike/
 │       ├── items.ron
 │       └── levels.ron
 ├── crates/
-│   ├── rogue_core/
+│   ├── tactical_sim/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
@@ -183,7 +184,7 @@ traditional-roguelike/
 │   │           ├── mod.rs
 │   │           ├── snapshot.rs
 │   │           └── migration.rs
-│   └── rogue_app/
+│   └── bread_and_iron_app/
 │       ├── Cargo.toml
 │       └── src/
 │           ├── main.rs
@@ -217,7 +218,7 @@ traditional-roguelike/
     └── deterministic_replay.rs
 ```
 
-Begin with these two crates. Additional crates should be introduced only after a domain boundary has demonstrated independent versioning, testing, or reuse needs.
+Begin with these crates. Additional crates should be introduced only after a domain boundary has demonstrated independent versioning, testing, or reuse needs.
 
 ---
 
@@ -226,8 +227,10 @@ Begin with these two crates. Additional crates should be introduced only after a
 ```toml
 [workspace]
 members = [
-    "crates/rogue_core",
-    "crates/rogue_app",
+    "crates/sim_core",
+    "crates/tactical_sim",
+    "crates/bread_and_iron",
+    "crates/bread_and_iron_app",
 ]
 resolver = "3"
 
@@ -248,10 +251,10 @@ The core crate should depend only on the Bevy subcrates it needs. The applicatio
 A typical dependency direction is:
 
 ```text
-rogue_app ──depends on──► rogue_core
+bread_and_iron_app ──depends on──► tactical_sim
 ```
 
-`rogue_core` must never depend on `rogue_app`.
+`tactical_sim` must never depend on `bread_and_iron_app`.
 
 ---
 
@@ -349,10 +352,10 @@ use bevy_ecs::prelude::*;
 pub struct Actor;
 
 #[derive(Component)]
-pub struct Player;
+pub struct ControlledActor;
 
 #[derive(Component)]
-pub struct Monster;
+pub struct HostileActor;
 
 #[derive(Component)]
 pub struct BlocksMovement;
@@ -393,7 +396,7 @@ Components should remain:
 - Domain-oriented
 - Independently queryable
 
-Avoid monolithic components such as `MonsterData` that combine health, position, AI, rendering, and inventory.
+Avoid monolithic components such as `ActorData` that combine health, position, AI, rendering, and inventory.
 
 ---
 
@@ -635,9 +638,9 @@ use bevy_ecs::prelude::*;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimulationStatus {
-    WaitingForPlayer,
+    AwaitingInput,
     Resolving,
-    GameOver,
+    Terminal,
 }
 
 pub fn drive_simulation(world: &mut World) {
@@ -659,8 +662,8 @@ pub fn drive_simulation(world: &mut World) {
 
 The simulation runs until:
 
-- It requires another player action
-- The game ends
+- It requires another controlled actor action
+- The simulation reaches a terminal state
 - The safety limit detects a likely infinite loop
 
 ### 10.4 Timeline-Based Scheduling
@@ -800,10 +803,10 @@ use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
 
 #[derive(Component)]
-pub struct HostileToPlayer;
+pub struct Hostile;
 
 #[derive(Component)]
-pub struct LastKnownPlayerPosition {
+pub struct LastKnownTargetPosition {
     pub level: LevelId,
     pub cell: IVec2,
     pub observed_at: u64,
@@ -820,7 +823,7 @@ pub enum AiGoal {
 }
 ```
 
-AI must emit the same `Action` type used by the player.
+AI must emit the same `Action` type used by the controlled actor.
 
 AI must not bypass:
 
@@ -840,18 +843,18 @@ Field of view is derived simulation state.
 A typical visibility update performs:
 
 1. Clear current visibility for the active level.
-2. Compute visible cells from the player's position.
+2. Compute visible cells from the controlled actor's position.
 3. Mark those cells as visible.
 4. Mark visible cells as explored.
 5. Notify the presentation layer that map visibility changed.
 
 Visibility should be recalculated when:
 
-- The player moves
+- The controlled actor moves
 - Sight-blocking terrain changes
 - Sight-blocking entities move
 - Vision range changes
-- The player changes levels
+- The controlled actor changes levels
 
 The renderer may apply presentation rules such as:
 
@@ -927,7 +930,6 @@ use serde::Deserialize;
 pub struct ActorDefinition {
     pub id: String,
     pub name: String,
-    pub glyph: char,
     pub maximum_health: i32,
     pub power: i32,
     pub defense: i32,
@@ -1071,7 +1073,7 @@ Migrations operate on serialized domain snapshots rather than live ECS state.
 
 ```rust
 use bevy::prelude::*;
-use rogue_core::SimulationPlugin;
+use tactical_sim::SimulationPlugin;
 
 fn main() {
     App::new()
@@ -1118,7 +1120,7 @@ Recommended top-level plugins:
 |---|---|
 | `SimulationPlugin` | Turn scheduling, actions, combat, AI, effects |
 | `AssetPlugin` | Loading and validating static content |
-| `InputPlugin` | Mapping platform input to player intentions |
+| `InputPlugin` | Mapping platform input to actor intentions |
 | `PresentationPlugin` | Map and actor visualization |
 | `GameUiPlugin` | HUD, inventory, targeting, combat log |
 | `SavePlugin` | File I/O and snapshot orchestration |
@@ -1188,7 +1190,7 @@ Useful debug validations include:
 - No actor outside map bounds
 - No duplicate persistent IDs
 - All referenced entities exist
-- Player count is exactly one during active play
+- Controlled-actor count is exactly one during active play
 
 ---
 
@@ -1203,8 +1205,8 @@ fn walking_into_enemy_becomes_melee_attack() {
     app.add_plugins(SimulationPlugin);
 
     // Insert a small test map.
-    // Spawn player and monster.
-    // Queue movement toward the monster.
+    // Spawn a controlled actor and a hostile actor.
+    // Queue movement toward the hostile actor.
     // Run SimulationStep.
     // Assert positions and health.
 }

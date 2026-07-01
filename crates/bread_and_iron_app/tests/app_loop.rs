@@ -1,0 +1,627 @@
+use bevy::ecs::system::RunSystemOnce;
+use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
+use bevy_math::IVec2;
+use bread_and_iron::{Monster, Player};
+use bread_and_iron_app::app_state::AppState;
+use bread_and_iron_app::assets::AssetPlugin;
+use bread_and_iron_app::game::GamePlugin;
+use bread_and_iron_app::game::{HudText, LogText};
+use bread_and_iron_app::input::InputPlugin;
+use bread_and_iron_app::persistence::{load_world_from_path, save_world_to_path};
+use bread_and_iron_app::presentation::PresentationPlugin;
+use bread_and_iron_app::presentation::PresentationRngState;
+use bread_and_iron_app::ui::GameUiPlugin;
+use tactical_sim::action::resolver::{ActionDecision, ActionOutcomeLog};
+use tactical_sim::actor::components::Health;
+use tactical_sim::actor::components::PersistentId;
+use tactical_sim::persistence::snapshot::{snapshot_digest, snapshot_world};
+use tactical_sim::simulation::{SimulationPlugin, SimulationStatus};
+use tactical_sim::time::clock::CurrentActor;
+use tactical_sim::world::map::GridPosition;
+use tactical_sim::world::map::LevelMap;
+
+fn build_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(StatesPlugin);
+    app.init_state::<AppState>();
+    app.insert_resource(ButtonInput::<KeyCode>::default());
+    app.add_plugins((
+        SimulationPlugin,
+        AssetPlugin,
+        GamePlugin,
+        InputPlugin,
+        PresentationPlugin,
+        GameUiPlugin,
+    ));
+    app
+}
+
+#[test]
+fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let map = app.world().resource::<LevelMap>();
+    let map_views = app.world().resource::<bread_and_iron_app::game::MapViews>();
+
+    assert_eq!(
+        map_views.tiles.len(),
+        map.width as usize * map.height as usize,
+        "every map tile should have a presentation entity"
+    );
+
+    let actor_views = app
+        .world()
+        .resource::<bread_and_iron_app::game::ActorViews>();
+    assert!(
+        actor_views.views.len() >= 2,
+        "the player and monster should both have presentation entities"
+    );
+
+    let camera_count = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<Camera2d>>()
+            .iter(world)
+            .count()
+    };
+
+    assert_eq!(
+        camera_count, 1,
+        "the game should have exactly one 2D camera"
+    );
+
+    assert_eq!(
+        *app.world().resource::<State<AppState>>(),
+        AppState::Playing
+    );
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::AwaitingInput
+    );
+
+    let player_position = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+    let player_tile = app
+        .world()
+        .resource::<LevelMap>()
+        .tile(player_position.cell)
+        .expect("player tile");
+    assert!(player_tile.visible);
+    assert!(player_tile.explored);
+
+    let before_player = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Numpad6);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::Numpad6);
+
+    let after_player = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+    let after_monster = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Monster>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("monster position")
+    };
+
+    assert_eq!(after_player.cell, before_player.cell + IVec2::new(1, 0));
+    assert_eq!(after_monster.cell, IVec2::new(8, 7));
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::AwaitingInput
+    );
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Numpad6);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::Numpad6);
+
+    let second_player = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+
+    assert_eq!(second_player.cell, after_player.cell + IVec2::new(1, 0));
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::AwaitingInput
+    );
+}
+
+#[test]
+fn presentation_plugin_hides_monsters_outside_the_player_fov() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let monster = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<Monster>>()
+            .iter(world)
+            .next()
+            .expect("monster entity")
+    };
+
+    app.world_mut().entity_mut(monster).insert(GridPosition {
+        level: tactical_sim::world::map::LevelId(0),
+        cell: IVec2::new(20, 13),
+    });
+
+    app.update();
+
+    let actor_views = app
+        .world()
+        .resource::<bread_and_iron_app::game::ActorViews>();
+    let view_entity = actor_views
+        .views
+        .get(&monster)
+        .copied()
+        .expect("monster view entity");
+    let visibility = app
+        .world()
+        .entity(view_entity)
+        .get::<Visibility>()
+        .copied()
+        .expect("monster visibility");
+
+    assert_eq!(visibility, Visibility::Hidden);
+
+    let player_position = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+    let player_tile = app
+        .world()
+        .resource::<LevelMap>()
+        .tile(player_position.cell)
+        .expect("player tile");
+    assert!(player_tile.visible);
+    assert!(player_tile.explored);
+}
+
+#[test]
+fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+
+    let player = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<(&tactical_sim::actor::components::StableActorId, Entity), With<Player>>()
+            .iter(world)
+            .next()
+            .map(|(stable_id, entity)| (stable_id.0, entity))
+            .expect("player entity")
+    };
+    let (player_id, player) = player;
+
+    app.world_mut().entity_mut(player).insert(Health {
+        current: 0,
+        maximum: 10,
+    });
+    app.world_mut()
+        .resource_mut::<tactical_sim::time::clock::TurnClock>()
+        .schedule_at(player_id, 0);
+    app.world_mut()
+        .resource_mut::<tactical_sim::action::queue::ActionQueue>()
+        .push(tactical_sim::action::intent::Action {
+            actor: player_id,
+            kind: tactical_sim::action::intent::ActionKind::Wait,
+        });
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+
+    app.update();
+    app.update();
+
+    assert_eq!(
+        *app.world().resource::<State<AppState>>(),
+        AppState::GameOver
+    );
+
+    let game_over_text = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&Text, With<LogText>>()
+            .iter(world)
+            .next()
+            .map(|text| text.as_str().to_string())
+            .expect("game over text")
+    };
+    assert!(game_over_text.contains("Game over"));
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyR);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyR);
+    app.update();
+    app.update();
+
+    assert_eq!(
+        *app.world().resource::<State<AppState>>(),
+        AppState::Playing
+    );
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::AwaitingInput
+    );
+    assert!(
+        app.world()
+            .resource::<ActionOutcomeLog>()
+            .outcomes
+            .is_empty()
+    );
+    assert!(matches!(
+        *app.world().resource::<ActionDecision>(),
+        ActionDecision::Idle
+    ));
+    assert!(app.world().resource::<CurrentActor>().0.is_none());
+
+    let hud_text = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&Text, With<HudText>>()
+            .iter(world)
+            .next()
+            .map(|text| text.as_str().to_string())
+            .expect("hud text")
+    };
+    assert!(hud_text.contains("HP"));
+    assert!(hud_text.contains("Pos"));
+    assert!(hud_text.contains("AwaitingInput"));
+}
+
+#[test]
+fn save_and_load_round_trip_preserves_the_snapshot_digest() {
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "rogue-save-{}-{}.ron",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    let mut saved_app = build_app();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+
+    let original_snapshot = snapshot_world(saved_app.world()).expect("original snapshot");
+    let original_digest = snapshot_digest(&original_snapshot).expect("original digest");
+    save_world_to_path(saved_app.world(), &save_path).expect("save file");
+
+    let mut loaded_app = build_app();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    load_world_from_path(loaded_app.world_mut(), &save_path).expect("load file");
+
+    let loaded_snapshot = snapshot_world(loaded_app.world()).expect("loaded snapshot");
+    let loaded_digest = snapshot_digest(&loaded_snapshot).expect("loaded digest");
+
+    assert_eq!(original_snapshot, loaded_snapshot);
+    assert_eq!(original_digest, loaded_digest);
+
+    let _ = std::fs::remove_file(save_path);
+}
+
+#[test]
+fn presentation_only_mutations_do_not_change_the_snapshot_digest() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    let before_digest = snapshot_digest(&before).expect("before digest");
+
+    if let Some(mut presentation_rng) = app.world_mut().get_resource_mut::<PresentationRngState>() {
+        let _ = presentation_rng.0.next_u64();
+        let _ = presentation_rng.0.next_u64();
+    }
+    if let Some(mut views) = app
+        .world_mut()
+        .get_resource_mut::<bread_and_iron_app::game::MapViews>()
+    {
+        views.tiles.clear();
+    }
+    if let Some(mut actor_views) = app
+        .world_mut()
+        .get_resource_mut::<bread_and_iron_app::game::ActorViews>()
+    {
+        actor_views.views.clear();
+    }
+    if let Some(mut log) = app
+        .world_mut()
+        .get_resource_mut::<bread_and_iron_app::game::CombatLog>()
+    {
+        log.lines.push_back("presentation only".to_string());
+    }
+    if let Some(mut health) = app
+        .world_mut()
+        .get_resource_mut::<bread_and_iron_app::game::HealthSnapshot>()
+    {
+        health.values.clear();
+    }
+
+    let after = snapshot_world(app.world()).expect("after snapshot");
+    let after_digest = snapshot_digest(&after).expect("after digest");
+
+    assert_eq!(before, after);
+    assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn extra_presentation_updates_do_not_change_the_authoritative_snapshot() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    let before_digest = snapshot_digest(&before).expect("before digest");
+
+    app.update();
+    app.update();
+    app.update();
+
+    let after = snapshot_world(app.world()).expect("after snapshot");
+    let after_digest = snapshot_digest(&after).expect("after digest");
+
+    assert_eq!(before, after);
+    assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn interleaved_presentation_updates_do_not_change_the_authoritative_turn_sequence() {
+    let mut baseline = build_app();
+    let mut noisy = build_app();
+
+    let play_move = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Numpad6);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::Numpad6);
+    };
+    let noise = |app: &mut App, updates: usize| {
+        for _ in 0..updates {
+            let _ = app.world_mut().run_system_once(
+                bread_and_iron_app::presentation::synchronization::synchronize_presentation,
+            );
+        }
+    };
+
+    baseline.update();
+    baseline.update();
+    baseline.update();
+    baseline.update();
+    play_move(&mut baseline);
+    noise(&mut baseline, 1);
+    play_move(&mut baseline);
+    noise(&mut baseline, 1);
+
+    noisy.update();
+    noisy.update();
+    noisy.update();
+    noisy.update();
+    play_move(&mut noisy);
+    noise(&mut noisy, 3);
+    play_move(&mut noisy);
+    noise(&mut noisy, 1);
+
+    let baseline_snapshot = snapshot_world(baseline.world()).expect("baseline snapshot");
+    let noisy_snapshot = snapshot_world(noisy.world()).expect("noisy snapshot");
+
+    assert_eq!(baseline_snapshot, noisy_snapshot);
+    assert_eq!(
+        snapshot_digest(&baseline_snapshot).expect("baseline digest"),
+        snapshot_digest(&noisy_snapshot).expect("noisy digest")
+    );
+}
+
+#[test]
+fn saving_twice_overwrites_the_existing_file_and_loads_the_new_state() {
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "rogue-save-overwrite-{}-{}.ron",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    let mut saved_app = build_app();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+
+    save_world_to_path(saved_app.world(), &save_path).expect("first save");
+    let first_snapshot = snapshot_world(saved_app.world()).expect("first snapshot");
+
+    let player = {
+        let world = saved_app.world_mut();
+        world
+            .query_filtered::<Entity, With<Player>>()
+            .iter(world)
+            .next()
+            .expect("player entity")
+    };
+    saved_app.world_mut().entity_mut(player).insert(Health {
+        current: 6,
+        maximum: 10,
+    });
+
+    let second_snapshot = snapshot_world(saved_app.world()).expect("second snapshot");
+    assert_ne!(first_snapshot, second_snapshot);
+    save_world_to_path(saved_app.world(), &save_path).expect("second save");
+
+    let mut loaded_app = build_app();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    load_world_from_path(loaded_app.world_mut(), &save_path).expect("load file");
+
+    let loaded_snapshot = snapshot_world(loaded_app.world()).expect("loaded snapshot");
+    assert_eq!(second_snapshot, loaded_snapshot);
+
+    let _ = std::fs::remove_file(save_path);
+}
+
+#[test]
+fn loaded_durable_entities_do_not_leak_across_restart() {
+    let mut save_path = std::env::temp_dir();
+    save_path.push(format!(
+        "rogue-save-restart-{}-{}.ron",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    let mut saved_app = build_app();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    saved_app.update();
+    save_world_to_path(saved_app.world(), &save_path).expect("save file");
+
+    let mut loaded_app = build_app();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    loaded_app.update();
+    load_world_from_path(loaded_app.world_mut(), &save_path).expect("load file");
+
+    let player = {
+        let world = loaded_app.world_mut();
+        world
+            .query_filtered::<(&tactical_sim::actor::components::StableActorId, Entity), With<Player>>()
+            .iter(world)
+            .next()
+            .map(|(stable_id, entity)| (stable_id.0, entity))
+            .expect("player entity")
+    };
+    let (player_id, player) = player;
+    loaded_app.world_mut().entity_mut(player).insert(Health {
+        current: 0,
+        maximum: 10,
+    });
+    loaded_app
+        .world_mut()
+        .resource_mut::<tactical_sim::time::clock::TurnClock>()
+        .schedule_at(player_id, 0);
+    loaded_app
+        .world_mut()
+        .resource_mut::<tactical_sim::action::queue::ActionQueue>()
+        .push(tactical_sim::action::intent::Action {
+            actor: player_id,
+            kind: tactical_sim::action::intent::ActionKind::Wait,
+        });
+    *loaded_app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+
+    loaded_app.update();
+    loaded_app.update();
+
+    loaded_app
+        .world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyR);
+    loaded_app.update();
+    loaded_app
+        .world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyR);
+    loaded_app.update();
+    loaded_app.update();
+
+    let player_count = {
+        let world = loaded_app.world_mut();
+        world
+            .query_filtered::<Entity, With<Player>>()
+            .iter(world)
+            .count()
+    };
+    let persistent_count = {
+        let world = loaded_app.world_mut();
+        world
+            .query_filtered::<Entity, With<PersistentId>>()
+            .iter(world)
+            .count()
+    };
+
+    assert_eq!(player_count, 1);
+    assert_eq!(persistent_count, 3);
+
+    let _ = std::fs::remove_file(save_path);
+}

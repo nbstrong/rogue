@@ -1,14 +1,9 @@
-[package]
-name = "rogue"
-version = "0.1.0"
-edition = "2024"
-
 [workspace]
 members = [
-    ".",
     "crates/sim_core",
-    "crates/rogue_core",
-    "crates/rogue_app",
+    "crates/tactical_sim",
+    "crates/bread_and_iron",
+    "crates/bread_and_iron_app",
 ]
 resolver = "3"
 
@@ -28,9 +23,6 @@ bevy_math = "0.19"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
-
-[dependencies]
-rogue_core = { path = "crates/rogue_core" }
 
 [profile.dev]
 debug = 1

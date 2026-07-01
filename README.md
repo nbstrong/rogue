@@ -2,10 +2,11 @@
 
 `rogue` is a traditional turn-based roguelike built as a Rust workspace with Bevy.
 
-The project is split into two crates:
+The project is split into three crates:
 
-- `rogue_core` contains deterministic simulation, game rules, map logic, AI, combat, items, scheduling, and persistence models.
-- `rogue_app` contains the Bevy application shell, input handling, presentation, UI, asset loading, and save-file I/O.
+- `tactical_sim` contains deterministic simulation, game rules, map logic, AI, combat, items, scheduling, and persistence models.
+- `bread_and_iron` contains headless game composition and scenario/bootstrap policy.
+- `bread_and_iron_app` contains the Bevy application shell, input handling, presentation, UI, asset loading, and save-file I/O.
 
 The architecture keeps gameplay authoritative in the core simulation and treats rendering as a projection of that state. This makes the game suitable for:
 
@@ -31,8 +32,9 @@ The architecture keeps gameplay authoritative in the core simulation and treats 
 ├── README.md
 ├── assets/
 ├── crates/
-│   ├── rogue_core/
-│   └── rogue_app/
+│   ├── tactical_sim/
+│   ├── bread_and_iron/
+│   └── bread_and_iron_app/
 ├── docs/
 │   └── architecture.md
 └── tests/
@@ -43,31 +45,37 @@ The architecture keeps gameplay authoritative in the core simulation and treats 
 Run the game:
 
 ```bash
-cargo run -p rogue_app --features dev
+cargo run -p bread_and_iron_app --features dev
 ```
 
 Run the app integration tests:
 
 ```bash
-cargo test -p rogue_app --features dev
+cargo test -p bread_and_iron_app --features dev
+```
+
+Run the game composition tests:
+
+```bash
+cargo test -p bread_and_iron
 ```
 
 Run the core simulation tests:
 
 ```bash
-cargo test -p rogue_core
+cargo test -p tactical_sim
 ```
 
 Run a specific app test file:
 
 ```bash
-cargo test -p rogue_app --features dev --test app_loop
+cargo test -p bread_and_iron_app --features dev --test app_loop
 ```
 
 Run a specific core test file:
 
 ```bash
-cargo test -p rogue_core --test combat
+cargo test -p tactical_sim --test combat
 ```
 
 ## Design Summary

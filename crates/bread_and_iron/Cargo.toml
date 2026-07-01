@@ -1,0 +1,10 @@
+[package]
+name = "bread_and_iron"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
+bevy_math = { workspace = true }
+tactical_sim = { path = "../tactical_sim" }
+

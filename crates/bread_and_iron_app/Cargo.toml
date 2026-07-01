@@ -1,0 +1,17 @@
+[package]
+name = "bread_and_iron_app"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+dev = ["bevy/dynamic_linking"]
+
+[dependencies]
+bevy = { workspace = true }
+bevy_app = { workspace = true }
+bevy_ecs = { workspace = true }
+bevy_math = { workspace = true }
+ron = { workspace = true }
+tactical_sim = { path = "../tactical_sim" }
+bread_and_iron = { path = "../bread_and_iron" }
