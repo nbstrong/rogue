@@ -616,15 +616,7 @@ fn continuation_after_restore_matches_the_original_world() {
         }
     };
 
-    let mut normalized_prefix = prefix_snapshot.clone();
-    normalized_prefix.simulation_driver.driver.progress = Default::default();
-    normalized_prefix.simulation_driver.driver.budget = Default::default();
-
-    let mut normalized_restored = restored_snapshot.clone();
-    normalized_restored.simulation_driver.driver.progress = Default::default();
-    normalized_restored.simulation_driver.driver.budget = Default::default();
-
-    assert_eq!(normalized_prefix, normalized_restored);
+    assert_eq!(prefix_snapshot, restored_snapshot);
     assert_eq!(
         snapshot_digest(&prefix_snapshot).expect("prefix digest"),
         snapshot_digest(&restored_snapshot).expect("restored digest")

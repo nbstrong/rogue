@@ -1214,6 +1214,8 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         .driver
         .backlog
         .retain_where(|work| work.cadence != Cadence::Tactical);
+    simulation_driver.driver.budget = Default::default();
+    simulation_driver.driver.progress = Default::default();
 
     if !matches!(
         *decision,
@@ -1524,6 +1526,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
 
     if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
         let mut restored_driver = snapshot.simulation_driver.clone();
+        restored_driver.driver.budget = Default::default();
+        restored_driver.driver.progress = Default::default();
         let non_tactical_backlog = restored_driver
             .driver
             .backlog
