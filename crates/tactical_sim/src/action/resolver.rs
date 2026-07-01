@@ -156,25 +156,25 @@ fn actor_flags(
 }
 
 fn can_attack(
-    attacker_is_player: bool,
-    attacker_is_hostile_to_player: bool,
-    target_is_player: bool,
-    target_is_monster: bool,
-    target_is_hostile_to_player: bool,
+    attacker_is_controlled: bool,
+    attacker_is_hostile: bool,
+    target_is_controlled: bool,
+    target_is_hostile_actor: bool,
+    target_is_hostile: bool,
 ) -> bool {
-    if attacker_is_player {
-        return target_is_monster && target_is_hostile_to_player;
+    if attacker_is_controlled {
+        return target_is_hostile_actor && target_is_hostile;
     }
 
-    attacker_is_hostile_to_player && target_is_player
+    attacker_is_hostile && target_is_controlled
 }
 
 fn find_valid_move_collision(
     stable_index: &StableEntityIndex,
     action_actor: ActorId,
     destination: GridPosition,
-    attacker_is_player: bool,
-    attacker_is_hostile_to_player: bool,
+    attacker_is_controlled: bool,
+    attacker_is_hostile: bool,
     positions: &Query<
         '_,
         '_,
@@ -209,8 +209,8 @@ fn find_valid_move_collision(
         let Ok((
             _entity,
             _,
-            occupant_player,
-            occupant_monster,
+            occupant_controlled,
+            occupant_hostile_actor,
             occupant_health,
             occupant_blocks_movement,
             occupant_hostile,
@@ -235,10 +235,10 @@ fn find_valid_move_collision(
         has_blocker = true;
 
         if can_attack(
-            attacker_is_player,
-            attacker_is_hostile_to_player,
-            occupant_player.is_some(),
-            occupant_monster.is_some(),
+            attacker_is_controlled,
+            attacker_is_hostile,
+            occupant_controlled.is_some(),
+            occupant_hostile_actor.is_some(),
             occupant_hostile.is_some(),
         ) && occupant_stats.is_some()
         {
@@ -288,7 +288,7 @@ pub fn validate_action(
         return;
     };
 
-    let Some((_, current_is_player, _, _, _, current_is_hostile_to_player, _)) =
+    let Some((_, current_is_controlled, _, _, _, current_is_hostile, _)) =
         actor_flags(&stable_index, &positions, current_actor)
     else {
         *decision = ActionDecision::Failed {
@@ -302,7 +302,7 @@ pub fn validate_action(
     };
 
     let Some(action) = queue.take_for_actor(current_actor) else {
-        if current_is_player {
+        if current_is_controlled {
             *status = SimulationStatus::WaitingForPlayer;
             *decision = ActionDecision::WaitingForPlayer;
         } else {
@@ -315,10 +315,7 @@ pub fn validate_action(
                 failure: ActionFailure::ActorUnavailable,
             };
         }
-        debug_assert!(
-            !current_is_player || !current_is_hostile_to_player,
-            "player actor should not be marked hostile-to-player"
-        );
+        debug_assert!(!current_is_controlled || !current_is_hostile);
         return;
     };
 
@@ -326,8 +323,8 @@ pub fn validate_action(
         &action,
         &map,
         &spatial,
-        current_is_player,
-        current_is_hostile_to_player,
+        current_is_controlled,
+        current_is_hostile,
         &stable_index,
         &positions,
         &inventories,
@@ -418,11 +415,11 @@ pub fn resolve_action(
         ActionKind::Move { delta } => {
             let Some((
                 actor_position,
-                attacker_is_player,
+                attacker_is_controlled,
                 _,
                 _,
                 _,
-                attacker_is_hostile_to_player,
+                attacker_is_hostile,
                 attacker_stats,
             )) = actor_flags(&stable_index, &positions, action.actor)
             else {
@@ -468,8 +465,8 @@ pub fn resolve_action(
                             &stable_index,
                             action.actor,
                             destination,
-                            attacker_is_player,
-                            attacker_is_hostile_to_player,
+                            attacker_is_controlled,
+                            attacker_is_hostile,
                             &positions,
                             &spatial,
                         ) {
@@ -561,11 +558,11 @@ pub fn resolve_action(
         ActionKind::Melee { target } => {
             let Some((
                 actor_position,
-                attacker_is_player,
+                attacker_is_controlled,
                 _,
                 _,
                 _,
-                attacker_is_hostile_to_player,
+                attacker_is_hostile,
                 attacker_stats,
             )) = actor_flags(&stable_index, &positions, action.actor)
             else {
@@ -586,11 +583,11 @@ pub fn resolve_action(
             };
             let Some((
                 target_position,
-                target_is_player,
-                target_is_monster,
+                target_is_controlled,
+                target_is_hostile_actor,
                 target_health,
                 _,
-                target_is_hostile_to_player,
+                target_is_hostile,
                 target_stats,
             )) = target_flags(&stable_index, &positions, target)
             else {
@@ -627,11 +624,11 @@ pub fn resolve_action(
                     target_position.cell,
                 )
                 && can_attack(
-                    attacker_is_player,
-                    attacker_is_hostile_to_player,
-                    target_is_player,
-                    target_is_monster,
-                    target_is_hostile_to_player,
+                    attacker_is_controlled,
+                    attacker_is_hostile,
+                    target_is_controlled,
+                    target_is_hostile_actor,
+                    target_is_hostile,
                 );
 
             if valid {
@@ -880,8 +877,8 @@ fn validate_action_kind(
     action: &Action,
     map: &LevelMap,
     spatial: &SpatialIndex,
-    attacker_is_player: bool,
-    attacker_is_hostile_to_player: bool,
+    attacker_is_controlled: bool,
+    attacker_is_hostile: bool,
     stable_index: &StableEntityIndex,
     positions: &Query<
         '_,
@@ -934,8 +931,8 @@ fn validate_action_kind(
                 stable_index,
                 action.actor,
                 destination,
-                attacker_is_player,
-                attacker_is_hostile_to_player,
+                attacker_is_controlled,
+                attacker_is_hostile,
                 positions,
                 spatial,
             )
@@ -968,11 +965,11 @@ fn validate_action_kind(
             };
             let Some((
                 target_position,
-                target_is_player,
-                target_is_monster,
+                target_is_controlled,
+                target_is_hostile_actor,
                 target_health,
                 _,
-                target_is_hostile_to_player,
+                target_is_hostile,
                 target_stats,
             )) = target_flags(stable_index, positions, *target)
             else {
@@ -1006,11 +1003,11 @@ fn validate_action_kind(
             }
 
             if !can_attack(
-                attacker_is_player,
-                attacker_is_hostile_to_player,
-                target_is_player,
-                target_is_monster,
-                target_is_hostile_to_player,
+                attacker_is_controlled,
+                attacker_is_hostile,
+                target_is_controlled,
+                target_is_hostile_actor,
+                target_is_hostile,
             ) {
                 return Err(ActionFailure::InvalidTarget);
             }

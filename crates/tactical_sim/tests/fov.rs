@@ -1,7 +1,8 @@
 use bevy_app::App;
 use bevy_math::IVec2;
+use bread_and_iron::Player;
 use tactical_sim::actor::components::Vision;
-use tactical_sim::actor::components::{BlocksSight, PersistentId, Player};
+use tactical_sim::actor::components::{BlocksSight, PersistentId};
 use tactical_sim::simulation::SimulationPlugin;
 use tactical_sim::simulation::SimulationStep;
 use tactical_sim::world::fov::recalculate_fov_for_player;

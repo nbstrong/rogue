@@ -1,7 +1,7 @@
 use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_math::IVec2;
-use bread_and_iron::generate_ai_action;
+use bread_and_iron::{Player, generate_ai_action};
 use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::action::resolver::{ActionFailure, ActionOutcome, ActionOutcomeLog};

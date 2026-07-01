@@ -12,11 +12,9 @@ pub struct Actor;
 
 #[derive(Component)]
 pub struct ControlledActor;
-pub type Player = ControlledActor;
 
 #[derive(Component)]
 pub struct HostileActor;
-pub type Monster = HostileActor;
 
 #[derive(Component)]
 pub struct BlocksMovement;
@@ -51,7 +49,6 @@ pub struct PrototypeId(pub String);
 
 #[derive(Component)]
 pub struct Hostile;
-pub type HostileToPlayer = Hostile;
 
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActiveStatuses(pub Vec<StatusEffect>);
@@ -62,7 +59,6 @@ pub struct LastKnownTargetPosition {
     pub cell: IVec2,
     pub observed_at: u64,
 }
-pub type LastKnownPlayerPosition = LastKnownTargetPosition;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PersistentId(pub u64);

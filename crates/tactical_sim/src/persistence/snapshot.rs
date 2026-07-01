@@ -8,9 +8,9 @@ use crate::action::intent::{Action, ActionKind, ActionTarget};
 use crate::action::queue::ActionQueue;
 use crate::actor::combat::{DamageKind, StatusEffect};
 use crate::actor::components::{
-    ActionSpeed, ActiveStatuses, Actor, AiGoal, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
-    StableActorId, StableEntityIndex, StableItemId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, AiGoal, BlocksMovement, BlocksSight, CombatStats,
+    ControlledActor, Health, Hostile, HostileActor, LastKnownTargetPosition, PersistentId,
+    PersistentIdAllocator, PrototypeId, StableActorId, StableEntityIndex, StableItemId, Vision,
 };
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
@@ -55,7 +55,7 @@ pub struct SavedActionSpeed {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SavedLastKnownPlayerPosition {
+pub struct SavedLastKnownTargetPosition {
     pub level: u32,
     pub x: i32,
     pub y: i32,
@@ -195,12 +195,15 @@ pub struct EntitySnapshot {
     pub id: u64,
     pub prototype: String,
     pub actor: bool,
-    pub player: bool,
-    pub monster: bool,
+    #[serde(alias = "player")]
+    pub controlled_actor: bool,
+    #[serde(alias = "monster")]
+    pub hostile_actor: bool,
     pub item: bool,
     pub blocks_movement: bool,
     pub blocks_sight: bool,
-    pub hostile_to_player: bool,
+    #[serde(alias = "hostile_to_player")]
+    pub hostile: bool,
     pub position: Option<SavedPosition>,
     pub health: Option<SavedHealth>,
     pub combat_stats: Option<SavedCombatStats>,
@@ -209,7 +212,8 @@ pub struct EntitySnapshot {
     pub inventory: Option<SavedInventory>,
     pub carried_by: Option<u64>,
     pub ai_goal: Option<AiGoalSnapshot>,
-    pub last_known_player_position: Option<SavedLastKnownPlayerPosition>,
+    #[serde(alias = "last_known_player_position")]
+    pub last_known_target_position: Option<SavedLastKnownTargetPosition>,
     #[serde(default)]
     pub active_statuses: Vec<StatusEffect>,
 }
@@ -506,15 +510,16 @@ fn build_entity_snapshot(
         .get::<AiGoal>()
         .map(|goal| ai_goal_to_snapshot(goal))
         .transpose()?;
-    let last_known_player_position = entity_ref
-        .get::<crate::actor::components::LastKnownPlayerPosition>()
-        .copied()
-        .map(|position| SavedLastKnownPlayerPosition {
-            level: position.level.0,
-            x: position.cell.x,
-            y: position.cell.y,
-            observed_at: position.observed_at,
-        });
+    let last_known_target_position =
+        entity_ref
+            .get::<LastKnownTargetPosition>()
+            .copied()
+            .map(|position| SavedLastKnownTargetPosition {
+                level: position.level.0,
+                x: position.cell.x,
+                y: position.cell.y,
+                observed_at: position.observed_at,
+            });
     let active_statuses = entity_ref
         .get::<ActiveStatuses>()
         .map(|statuses| statuses.0.clone())
@@ -524,12 +529,12 @@ fn build_entity_snapshot(
         id,
         prototype,
         actor: entity_ref.contains::<Actor>(),
-        player: entity_ref.contains::<Player>(),
-        monster: entity_ref.contains::<Monster>(),
+        controlled_actor: entity_ref.contains::<ControlledActor>(),
+        hostile_actor: entity_ref.contains::<HostileActor>(),
         item: entity_ref.contains::<Item>(),
         blocks_movement: entity_ref.contains::<BlocksMovement>(),
         blocks_sight: entity_ref.contains::<BlocksSight>(),
-        hostile_to_player: entity_ref.contains::<HostileToPlayer>(),
+        hostile: entity_ref.contains::<Hostile>(),
         position,
         health,
         combat_stats,
@@ -538,7 +543,7 @@ fn build_entity_snapshot(
         inventory,
         carried_by,
         ai_goal,
-        last_known_player_position,
+        last_known_target_position,
         active_statuses,
     })
 }
@@ -799,7 +804,7 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
             }
         }
 
-        if let Some(position) = &entity.last_known_player_position {
+        if let Some(position) = &entity.last_known_target_position {
             if !level_ids.contains(&position.level) {
                 return Err(format!(
                     "entity {} last-known position references missing level {}",
@@ -1038,7 +1043,7 @@ fn position_within_level(
 }
 
 fn last_known_position_within_level(
-    position: &SavedLastKnownPlayerPosition,
+    position: &SavedLastKnownTargetPosition,
     level: &LevelSnapshot,
     entity_id: u64,
 ) -> SnapshotResult<()> {
@@ -1361,8 +1366,9 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
         .get_resource::<SpatialIndex>()
         .cloned()
         .ok_or_else(|| "missing spatial index after rebuild".to_string())?;
-    let mut player_query = world.query_filtered::<(&GridPosition, &Vision), With<Player>>();
-    let player_position = player_query
+    let mut controlled_query =
+        world.query_filtered::<(&GridPosition, &Vision), With<ControlledActor>>();
+    let player_position = controlled_query
         .iter(world)
         .next()
         .map(|(position, vision)| (*position, *vision));
@@ -1421,11 +1427,11 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         if entity.actor {
             spawned.insert(Actor);
         }
-        if entity.player {
-            spawned.insert(crate::actor::components::ControlledActor);
+        if entity.controlled_actor {
+            spawned.insert(ControlledActor);
         }
-        if entity.monster {
-            spawned.insert(crate::actor::components::HostileActor);
+        if entity.hostile_actor {
+            spawned.insert(HostileActor);
         }
         if entity.item {
             spawned.insert(Item);
@@ -1436,8 +1442,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         if entity.blocks_sight {
             spawned.insert(BlocksSight);
         }
-        if entity.hostile_to_player {
-            spawned.insert(crate::actor::components::Hostile);
+        if entity.hostile {
+            spawned.insert(Hostile);
         }
         if let Some(position) = &entity.position {
             spawned.insert(saved_to_position(position));
@@ -1512,8 +1518,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             entity_mut.insert(ai_goal_from_snapshot(goal)?);
         }
 
-        if let Some(position) = &entity.last_known_player_position {
-            entity_mut.insert(crate::actor::components::LastKnownPlayerPosition {
+        if let Some(position) = &entity.last_known_target_position {
+            entity_mut.insert(LastKnownTargetPosition {
                 level: LevelId(position.level),
                 cell: IVec2::new(position.x, position.y),
                 observed_at: position.observed_at,

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tactical_sim::actor::components::Player;
+use bread_and_iron::Player;
 use tactical_sim::world::map::{GridPosition, LevelMap};
 
 use crate::game::TILE_SIZE;

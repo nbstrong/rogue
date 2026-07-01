@@ -2,6 +2,7 @@ use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy_math::IVec2;
+use bread_and_iron::{Monster, Player};
 use bread_and_iron_app::app_state::AppState;
 use bread_and_iron_app::assets::AssetPlugin;
 use bread_and_iron_app::game::GamePlugin;
@@ -13,9 +14,7 @@ use bread_and_iron_app::presentation::PresentationRngState;
 use bread_and_iron_app::ui::GameUiPlugin;
 use tactical_sim::action::resolver::{ActionDecision, ActionOutcomeLog};
 use tactical_sim::actor::components::Health;
-use tactical_sim::actor::components::Monster;
 use tactical_sim::actor::components::PersistentId;
-use tactical_sim::actor::components::Player;
 use tactical_sim::persistence::snapshot::{snapshot_digest, snapshot_world};
 use tactical_sim::simulation::{SimulationPlugin, SimulationStatus};
 use tactical_sim::time::clock::CurrentActor;
@@ -133,7 +132,7 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
     let after_monster = {
         let world = app.world_mut();
         world
-            .query_filtered::<&GridPosition, With<tactical_sim::actor::components::Monster>>()
+            .query_filtered::<&GridPosition, With<Monster>>()
             .iter(world)
             .next()
             .copied()

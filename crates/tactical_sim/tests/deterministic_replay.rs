@@ -2,7 +2,7 @@ use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 use bevy_math::IVec2;
-use bread_and_iron::generate_ai_action;
+use bread_and_iron::{Monster, Player, generate_ai_action};
 use serde::Deserialize;
 
 use sim_core::{DomainWorkId, PresentationRng, SimSpeed};
@@ -11,8 +11,8 @@ use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::actor::combat::StatusEffect;
 use tactical_sim::actor::components::{
-    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health, Monster,
-    PersistentId, PersistentIdAllocator, Player, PrototypeId, StableActorId, StableItemId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
+    PersistentId, PersistentIdAllocator, PrototypeId, StableActorId, StableItemId, Vision,
 };
 use tactical_sim::actor::spawn::spawn_vertical_slice;
 use tactical_sim::content::definitions::{ItemDefinition, ItemUseEffect};
@@ -22,7 +22,7 @@ use tactical_sim::item::effects::{Effect, EffectQueue, apply_pending_effects};
 use tactical_sim::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use tactical_sim::persistence::rng::RandomStreams;
 use tactical_sim::persistence::snapshot::{
-    ActionKindSnapshot, AiGoalSnapshot, GameSnapshot, SavedInventory, SavedLastKnownPlayerPosition,
+    ActionKindSnapshot, AiGoalSnapshot, GameSnapshot, SavedInventory, SavedLastKnownTargetPosition,
     SavedPosition, ScheduledActorSnapshot, snapshot_digest, snapshot_from_text, snapshot_to_text,
     snapshot_world,
 };
@@ -1437,13 +1437,13 @@ fn malformed_snapshots_are_rejected() {
     let player_id = base
         .entities
         .iter()
-        .find(|entity| entity.player)
+        .find(|entity| entity.controlled_actor)
         .map(|entity| entity.id)
         .expect("player id");
     let monster_id = base
         .entities
         .iter()
-        .find(|entity| entity.monster)
+        .find(|entity| entity.hostile_actor)
         .map(|entity| entity.id)
         .expect("monster id");
     let item_id = base
@@ -1589,7 +1589,7 @@ fn malformed_snapshots_are_rejected() {
         .iter_mut()
         .find(|entity| entity.id == monster_id)
         .expect("monster entity")
-        .last_known_player_position = Some(SavedLastKnownPlayerPosition {
+        .last_known_target_position = Some(SavedLastKnownTargetPosition {
         level: 0,
         x: 999,
         y: 999,
