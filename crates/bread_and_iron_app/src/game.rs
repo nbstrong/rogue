@@ -2,9 +2,10 @@ use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 use bevy_math::IVec2;
+use bread_and_iron::Player;
 use bread_and_iron::generate_ai_action;
 use tactical_sim::actor::components::Health;
-use tactical_sim::actor::components::{PersistentIdAllocator, Player};
+use tactical_sim::actor::components::PersistentIdAllocator;
 use tactical_sim::content::registry::ContentRegistry;
 use tactical_sim::persistence::rng::RandomStreams;
 use tactical_sim::simulation::SimulationDriverState;

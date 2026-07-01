@@ -7,8 +7,8 @@ use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::action::resolver::{ActionDecision, ActionOutcomeLog};
 use tactical_sim::actor::components::{
     ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
-    StableActorId, StableEntityIndex, StableItemId, Vision,
+    PersistentId, PersistentIdAllocator, PrototypeId, StableActorId, StableEntityIndex,
+    StableItemId, Vision,
 };
 use tactical_sim::content::definitions::{ActorDefinition, ItemDefinition, ItemUseEffect};
 use tactical_sim::content::registry::ContentRegistry;
@@ -21,6 +21,10 @@ use tactical_sim::world::fov::recalculate_fov_for_player;
 use tactical_sim::world::generation::generate_one_room_with_rng;
 use tactical_sim::world::map::{GridPosition, LevelId, LevelMap};
 use tactical_sim::world::spatial::SpatialIndex;
+
+pub use tactical_sim::actor::components::{
+    ControlledActor as Player, Hostile as HostileToPlayer, HostileActor as Monster,
+};
 
 #[derive(Component)]
 struct SessionEntity;

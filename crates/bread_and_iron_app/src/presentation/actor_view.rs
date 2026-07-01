@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::text::{Justify, TextColor, TextFont, TextLayout};
 use bevy_math::Vec3;
-use tactical_sim::actor::components::{Monster, Player};
+use bread_and_iron::{Monster, Player};
 use tactical_sim::world::map::{GridPosition, LevelMap};
 
 use crate::game::{ActorView, ActorViews, SessionEntity, TILE_SIZE};

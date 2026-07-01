@@ -11,9 +11,8 @@ use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
 use tactical_sim::actor::combat::StatusEffect;
 use tactical_sim::actor::components::{
-    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
-    StableActorId, StableItemId, Vision,
+    ActionSpeed, ActiveStatuses, Actor, BlocksMovement, BlocksSight, CombatStats, Health, Monster,
+    PersistentId, PersistentIdAllocator, Player, PrototypeId, StableActorId, StableItemId, Vision,
 };
 use tactical_sim::actor::spawn::spawn_vertical_slice;
 use tactical_sim::content::definitions::{ItemDefinition, ItemUseEffect};
@@ -208,7 +207,7 @@ fn initialize_world(app: &mut App, seed: u64) {
             tactical_sim::ActorId::new(player_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
             Actor,
-            Player,
+            tactical_sim::actor::components::ControlledActor,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -241,8 +240,8 @@ fn initialize_world(app: &mut App, seed: u64) {
             tactical_sim::ActorId::new(monster_persistent_id.0).expect("valid actor id");
         let entity = app.world_mut().spawn((
             Actor,
-            Monster,
-            HostileToPlayer,
+            tactical_sim::actor::components::HostileActor,
+            tactical_sim::actor::components::Hostile,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -1801,7 +1800,7 @@ fn nonzero_level_ids_survive_restore_and_resave() {
     };
     app.world_mut().spawn((
         Actor,
-        Player,
+        tactical_sim::actor::components::ControlledActor,
         BlocksMovement,
         BlocksSight,
         Health {
@@ -1895,7 +1894,7 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
         .world_mut()
         .spawn((
             Actor,
-            Player,
+            tactical_sim::actor::components::ControlledActor,
             BlocksMovement,
             BlocksSight,
             Health {

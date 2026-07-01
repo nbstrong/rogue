@@ -11,10 +11,12 @@ pub type ItemId = sim_core::ItemId;
 pub struct Actor;
 
 #[derive(Component)]
-pub struct Player;
+pub struct ControlledActor;
+pub type Player = ControlledActor;
 
 #[derive(Component)]
-pub struct Monster;
+pub struct HostileActor;
+pub type Monster = HostileActor;
 
 #[derive(Component)]
 pub struct BlocksMovement;
@@ -48,17 +50,19 @@ pub struct ActionSpeed {
 pub struct PrototypeId(pub String);
 
 #[derive(Component)]
-pub struct HostileToPlayer;
+pub struct Hostile;
+pub type HostileToPlayer = Hostile;
 
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActiveStatuses(pub Vec<StatusEffect>);
 
 #[derive(Component, Debug, Clone, Copy)]
-pub struct LastKnownPlayerPosition {
+pub struct LastKnownTargetPosition {
     pub level: LevelId,
     pub cell: IVec2,
     pub observed_at: u64,
 }
+pub type LastKnownPlayerPosition = LastKnownTargetPosition;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PersistentId(pub u64);

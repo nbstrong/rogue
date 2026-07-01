@@ -93,7 +93,12 @@ pub fn recalculate_fov_for_player(
 pub fn recalculate_fov(
     mut map: ResMut<'_, LevelMap>,
     spatial: Res<'_, SpatialIndex>,
-    player: Query<'_, '_, (&GridPosition, &Vision), With<crate::actor::components::Player>>,
+    player: Query<
+        '_,
+        '_,
+        (&GridPosition, &Vision),
+        With<crate::actor::components::ControlledActor>,
+    >,
 ) {
     let Some((player_position, vision)) = player.iter().next() else {
         return;

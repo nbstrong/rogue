@@ -2,7 +2,7 @@ use bevy_ecs::prelude::*;
 use std::cmp::Reverse;
 
 use crate::action::queue::ActionQueue;
-use crate::actor::components::{Player, StableActorId, StableEntityIndex};
+use crate::actor::components::{ControlledActor, StableActorId, StableEntityIndex};
 use crate::simulation::SimulationStatus;
 use crate::time::clock::{CurrentActor, TurnClock};
 
@@ -53,7 +53,7 @@ pub fn finish_simulation_step(
     clock: Res<'_, TurnClock>,
     queue: Res<'_, ActionQueue>,
     stable_index: Res<'_, StableEntityIndex>,
-    player: Query<'_, '_, &StableActorId, With<Player>>,
+    player: Query<'_, '_, &StableActorId, With<ControlledActor>>,
     actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId)>,
     mut status: ResMut<'_, SimulationStatus>,
 ) {

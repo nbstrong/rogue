@@ -1,7 +1,8 @@
 use bevy::prelude::*;
+use bread_and_iron::Player;
 use tactical_sim::action::intent::{Action, ActionKind};
 use tactical_sim::action::queue::ActionQueue;
-use tactical_sim::actor::components::{Player, StableActorId};
+use tactical_sim::actor::components::StableActorId;
 use tactical_sim::simulation::SimulationStatus;
 
 use crate::app_state::{AppState, CurrentInputMode, InputMode};

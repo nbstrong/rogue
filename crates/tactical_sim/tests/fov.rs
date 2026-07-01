@@ -125,7 +125,7 @@ fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
     let player = app
         .world_mut()
         .spawn((
-            Player,
+            tactical_sim::actor::components::ControlledActor,
             Vision { range: 5 },
             GridPosition {
                 level,

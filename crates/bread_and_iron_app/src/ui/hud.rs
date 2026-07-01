@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use tactical_sim::actor::components::{Health, Player};
+use bread_and_iron::Player;
+use tactical_sim::actor::components::Health;
 use tactical_sim::simulation::SimulationStatus;
 use tactical_sim::world::map::GridPosition;
 

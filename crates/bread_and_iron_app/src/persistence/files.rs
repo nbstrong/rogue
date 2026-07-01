@@ -203,7 +203,7 @@ mod tests {
     use tactical_sim::action::resolver::ActionDecision;
     use tactical_sim::actor::components::{
         ActionSpeed, Actor, BlocksMovement, BlocksSight, CombatStats, Health, PersistentId,
-        PersistentIdAllocator, Player, PrototypeId, StableActorId, Vision,
+        PersistentIdAllocator, PrototypeId, StableActorId, Vision,
     };
     use tactical_sim::item::effects::EffectQueue;
     use tactical_sim::persistence::rng::RandomStreams;
@@ -231,7 +231,7 @@ mod tests {
         let player = world
             .spawn((
                 Actor,
-                Player,
+                tactical_sim::actor::components::ControlledActor,
                 BlocksMovement,
                 BlocksSight,
                 Health {

@@ -1422,10 +1422,10 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             spawned.insert(Actor);
         }
         if entity.player {
-            spawned.insert(Player);
+            spawned.insert(crate::actor::components::ControlledActor);
         }
         if entity.monster {
-            spawned.insert(Monster);
+            spawned.insert(crate::actor::components::HostileActor);
         }
         if entity.item {
             spawned.insert(Item);
@@ -1437,7 +1437,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             spawned.insert(BlocksSight);
         }
         if entity.hostile_to_player {
-            spawned.insert(HostileToPlayer);
+            spawned.insert(crate::actor::components::Hostile);
         }
         if let Some(position) = &entity.position {
             spawned.insert(saved_to_position(position));

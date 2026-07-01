@@ -20,7 +20,7 @@ pub fn spawn_player(
     commands
         .spawn((
             Actor,
-            Player,
+            ControlledActor,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -59,10 +59,10 @@ pub fn spawn_monster(
     commands
         .spawn((
             Actor,
-            Monster,
+            HostileActor,
             BlocksMovement,
             BlocksSight,
-            HostileToPlayer,
+            Hostile,
             Health {
                 current: definition.maximum_health,
                 maximum: definition.maximum_health,

@@ -4,7 +4,7 @@ use bevy_math::IVec2;
 use crate::action::intent::{Action, ActionKind};
 use crate::action::queue::ActionQueue;
 use crate::actor::components::{
-    HostileToPlayer, Monster, Player, StableActorId, StableEntityIndex,
+    ControlledActor, Hostile, HostileActor, StableActorId, StableEntityIndex,
 };
 use crate::persistence::rng::RandomStreams;
 use crate::time::clock::CurrentActor;
@@ -21,9 +21,9 @@ pub fn generate_ai_action(
         '_,
         '_,
         (&GridPosition, &StableActorId),
-        (With<Monster>, With<HostileToPlayer>, Without<Player>),
+        (With<HostileActor>, With<Hostile>, Without<ControlledActor>),
     >,
-    players: Query<'_, '_, (&GridPosition, &StableActorId), With<Player>>,
+    controlled_actors: Query<'_, '_, (&GridPosition, &StableActorId), With<ControlledActor>>,
     spatial: Res<'_, SpatialIndex>,
     stable_index: Res<'_, StableEntityIndex>,
     current_actor: Option<Res<'_, CurrentActor>>,
@@ -38,7 +38,7 @@ pub fn generate_ai_action(
     if queue.contains_actor(current_actor_id) {
         return;
     }
-    let Some((player_position, player_stable_id)) = players.iter().next() else {
+    let Some((player_position, player_stable_id)) = controlled_actors.iter().next() else {
         return;
     };
     let Some(_player_entity) = stable_index.actor(player_stable_id.0) else {

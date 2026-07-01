@@ -102,7 +102,7 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         .world_mut()
         .spawn((
             Actor,
-            Player,
+            tactical_sim::actor::components::ControlledActor,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -132,10 +132,10 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
         .world_mut()
         .spawn((
             Actor,
-            Monster,
+            tactical_sim::actor::components::HostileActor,
             BlocksMovement,
             BlocksSight,
-            HostileToPlayer,
+            tactical_sim::actor::components::Hostile,
             Health {
                 current: 10,
                 maximum: 10,
@@ -469,7 +469,7 @@ fn non_hostile_actor_does_not_bump_the_player() {
         .world_mut()
         .spawn((
             Actor,
-            Monster,
+            tactical_sim::actor::components::HostileActor,
             BlocksMovement,
             BlocksSight,
             Health {
@@ -539,10 +539,10 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
         .world_mut()
         .spawn((
             Actor,
-            Monster,
+            tactical_sim::actor::components::HostileActor,
             BlocksMovement,
             BlocksSight,
-            HostileToPlayer,
+            tactical_sim::actor::components::Hostile,
             Health {
                 current: 9,
                 maximum: 9,
@@ -677,7 +677,7 @@ fn pickup_of_an_item_carried_by_someone_else_does_not_mutate_state() {
         .world_mut()
         .spawn((
             Actor,
-            Monster,
+            tactical_sim::actor::components::HostileActor,
             BlocksMovement,
             BlocksSight,
             ActiveStatuses::default(),
@@ -857,7 +857,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
         .world_mut()
         .spawn((
             Actor,
-            Monster,
+            tactical_sim::actor::components::HostileActor,
             BlocksMovement,
             BlocksSight,
             Health {
