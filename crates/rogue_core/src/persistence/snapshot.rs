@@ -863,6 +863,9 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         if work.id.raw() == 0 {
             return Err("simulation driver backlog contains invalid domain work id 0".to_string());
         }
+        if work.cadence == Cadence::Tactical {
+            return Err("simulation driver backlog must not contain tactical work".to_string());
+        }
     }
 
     for event in &snapshot.simulation_driver.event_log {
@@ -870,6 +873,9 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
             return Err(
                 "simulation driver event log contains invalid domain work id 0".to_string(),
             );
+        }
+        if event.cadence == Cadence::Tactical {
+            return Err("simulation driver event log must not contain tactical work".to_string());
         }
     }
 

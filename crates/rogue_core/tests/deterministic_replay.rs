@@ -23,7 +23,9 @@ use rogue_core::persistence::snapshot::{
     SavedPosition, ScheduledActorSnapshot, snapshot_digest, snapshot_from_text, snapshot_to_text,
     snapshot_world,
 };
-use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
+use rogue_core::simulation::{
+    DomainWorkError, DomainWorkEvent, SimulationPlugin, SimulationStatus,
+};
 use rogue_core::time::clock::{CurrentActor, TurnClock};
 use rogue_core::world::fov::recalculate_fov_for_player;
 use rogue_core::world::generation::generate_one_room_with_rng;
@@ -472,24 +474,30 @@ fn configure_domain_work(app: &mut App, speed: SimSpeed, target: u64) {
     driver
         .request_advance(target)
         .expect("domain request should be valid");
-    driver.enqueue_work(
-        sim_core::Cadence::Day,
-        5,
-        2,
-        DomainWorkId::new(3).expect("domain work id"),
-    );
-    driver.enqueue_work(
-        sim_core::Cadence::Hour,
-        10,
-        1,
-        DomainWorkId::new(2).expect("domain work id"),
-    );
-    driver.enqueue_work(
-        sim_core::Cadence::Minute,
-        10,
-        0,
-        DomainWorkId::new(1).expect("domain work id"),
-    );
+    driver
+        .enqueue_work(
+            sim_core::Cadence::Day,
+            5,
+            2,
+            DomainWorkId::new(3).expect("domain work id"),
+        )
+        .expect("day work should be valid");
+    driver
+        .enqueue_work(
+            sim_core::Cadence::Hour,
+            10,
+            1,
+            DomainWorkId::new(2).expect("domain work id"),
+        )
+        .expect("hour work should be valid");
+    driver
+        .enqueue_work(
+            sim_core::Cadence::Minute,
+            10,
+            0,
+            DomainWorkId::new(1).expect("domain work id"),
+        )
+        .expect("minute work should be valid");
 }
 
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
@@ -706,18 +714,22 @@ fn future_backlog_remains_dormant_after_the_current_request_completes() {
         state
             .request_advance(5)
             .expect("initial request should be valid");
-        state.enqueue_work(
-            sim_core::Cadence::Day,
-            5,
-            2,
-            DomainWorkId::new(3).expect("domain work id"),
-        );
-        state.enqueue_work(
-            sim_core::Cadence::Hour,
-            10,
-            1,
-            DomainWorkId::new(2).expect("domain work id"),
-        );
+        state
+            .enqueue_work(
+                sim_core::Cadence::Day,
+                5,
+                2,
+                DomainWorkId::new(3).expect("domain work id"),
+            )
+            .expect("day work should be valid");
+        state
+            .enqueue_work(
+                sim_core::Cadence::Hour,
+                10,
+                1,
+                DomainWorkId::new(2).expect("domain work id"),
+            )
+            .expect("hour work should be valid");
     }
 
     rogue_core::drive_simulation(app.world_mut());
@@ -811,18 +823,22 @@ fn current_minute_requests_process_all_due_work_without_losing_the_request() {
         state
             .request_advance(0)
             .expect("current-minute request should be valid");
-        state.enqueue_work(
-            sim_core::Cadence::Minute,
-            0,
-            0,
-            DomainWorkId::new(1).expect("domain work id"),
-        );
-        state.enqueue_work(
-            sim_core::Cadence::Hour,
-            0,
-            1,
-            DomainWorkId::new(2).expect("domain work id"),
-        );
+        state
+            .enqueue_work(
+                sim_core::Cadence::Minute,
+                0,
+                0,
+                DomainWorkId::new(1).expect("domain work id"),
+            )
+            .expect("minute work should be valid");
+        state
+            .enqueue_work(
+                sim_core::Cadence::Hour,
+                0,
+                1,
+                DomainWorkId::new(2).expect("domain work id"),
+            )
+            .expect("hour work should be valid");
     }
 
     set_simulation_budget(&mut app, 1, 1);
@@ -904,38 +920,81 @@ fn request_rejection_and_snapshot_request_window_invariants() {
 }
 
 #[test]
-fn invalid_domain_work_panics_before_it_can_execute() {
+fn invalid_domain_work_is_rejected_before_any_authoritative_mutation() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     for declared_cost in [0, 2] {
+        let mut app = App::new();
+        app.add_plugins(SimulationPlugin);
+        initialize_world(&mut app, 0);
+
+        {
+            let mut state = app
+                .world_mut()
+                .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+            state.driver.clock.set_speed(SimSpeed::VeryFast);
+            state.request_advance(0).expect("request should be valid");
+            state.event_log.push(DomainWorkEvent {
+                cadence: sim_core::Cadence::Minute,
+                due_minute: 0,
+                sequence: 0,
+                id: DomainWorkId::new(11).expect("domain work id"),
+            });
+            state.driver.enqueue(sim_core::DueWork {
+                cadence: sim_core::Cadence::Minute,
+                due_minute: 0,
+                sequence: 1,
+                id: DomainWorkId::new(7).expect("domain work id"),
+                domain_event_cost: declared_cost,
+            });
+        }
+
+        let before = {
+            let state = app
+                .world()
+                .resource::<rogue_core::simulation::SimulationDriverState>();
+            state.clone()
+        };
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let mut app = App::new();
-            app.add_plugins(SimulationPlugin);
-            initialize_world(&mut app, 0);
-
-            {
-                let mut state = app
-                    .world_mut()
-                    .resource_mut::<rogue_core::simulation::SimulationDriverState>();
-                state.driver.clock.set_speed(SimSpeed::VeryFast);
-                state.request_advance(0).expect("request should be valid");
-                state.driver.enqueue(sim_core::DueWork {
-                    cadence: sim_core::Cadence::Minute,
-                    due_minute: 0,
-                    sequence: 0,
-                    id: DomainWorkId::new(7).expect("domain work id"),
-                    domain_event_cost: declared_cost,
-                });
-            }
-
-            rogue_core::drive_simulation(app.world_mut());
+            rogue_core::drive_simulation(app.world_mut())
         }));
 
         assert!(
             result.is_err(),
-            "declared cost {declared_cost} should be rejected during execution"
+            "declared cost {declared_cost} should be rejected before execution"
         );
+        let after = {
+            let state = app
+                .world()
+                .resource::<rogue_core::simulation::SimulationDriverState>();
+            state.clone()
+        };
+        assert_eq!(before, after);
     }
+}
+
+#[test]
+fn enqueue_work_rejects_tactical_cadence() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    let mut state = app
+        .world_mut()
+        .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+    let result = state.enqueue_work(
+        sim_core::Cadence::Tactical,
+        0,
+        0,
+        DomainWorkId::new(77).expect("domain work id"),
+    );
+
+    assert!(matches!(
+        result,
+        Err(DomainWorkError::TacticalCadence {
+            id
+        }) if id.raw() == 77
+    ));
 }
 
 #[test]
@@ -1012,18 +1071,22 @@ fn domain_work_roundtrip_preserves_partial_progress_and_event_order() {
         state
             .request_advance(10)
             .expect("domain request should be valid");
-        state.enqueue_work(
-            sim_core::Cadence::Minute,
-            10,
-            0,
-            DomainWorkId::new(1).expect("domain work id"),
-        );
-        state.enqueue_work(
-            sim_core::Cadence::Hour,
-            10,
-            1,
-            DomainWorkId::new(2).expect("domain work id"),
-        );
+        state
+            .enqueue_work(
+                sim_core::Cadence::Minute,
+                10,
+                0,
+                DomainWorkId::new(1).expect("domain work id"),
+            )
+            .expect("minute work should be valid");
+        state
+            .enqueue_work(
+                sim_core::Cadence::Hour,
+                10,
+                1,
+                DomainWorkId::new(2).expect("domain work id"),
+            )
+            .expect("hour work should be valid");
     }
     set_simulation_budget(&mut app, 1, 1);
 
@@ -1097,12 +1160,14 @@ fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
         let mut driver = app
             .world_mut()
             .resource_mut::<rogue_core::simulation::SimulationDriverState>();
-        driver.enqueue_work(
-            sim_core::Cadence::Hour,
-            12,
-            99,
-            DomainWorkId::new(5).expect("domain work id"),
-        );
+        driver
+            .enqueue_work(
+                sim_core::Cadence::Hour,
+                12,
+                99,
+                DomainWorkId::new(5).expect("domain work id"),
+            )
+            .expect("hour work should be valid");
     }
 
     let snapshot = snapshot_world(app.world()).expect("snapshot");
@@ -1379,6 +1444,22 @@ fn malformed_snapshots_are_rejected() {
         "invalid allocator",
         invalid_allocator,
         "must exceed max entity id",
+    ));
+
+    let mut tactical_event_log = base.clone();
+    tactical_event_log
+        .simulation_driver
+        .event_log
+        .push(DomainWorkEvent {
+            cadence: sim_core::Cadence::Tactical,
+            due_minute: 0,
+            sequence: 0,
+            id: DomainWorkId::new(900).expect("domain work id"),
+        });
+    cases.push((
+        "tactical event log",
+        tactical_event_log,
+        "event log must not contain tactical work",
     ));
 
     let mut duplicate_levels = base.clone();

@@ -66,6 +66,17 @@ impl DomainAdvanceRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainWorkError {
+    TacticalCadence {
+        id: DomainWorkId,
+    },
+    InvalidEventCost {
+        id: DomainWorkId,
+        declared_cost: usize,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainWorkEvent {
     pub cadence: Cadence,
@@ -138,7 +149,10 @@ impl DomainSimulationState {
         due_minute: u64,
         sequence: u64,
         id: DomainWorkId,
-    ) {
+    ) -> Result<(), DomainWorkError> {
+        if cadence == Cadence::Tactical {
+            return Err(DomainWorkError::TacticalCadence { id });
+        }
         self.driver.enqueue(DueWork {
             cadence,
             due_minute,
@@ -146,6 +160,7 @@ impl DomainSimulationState {
             id,
             domain_event_cost: 1,
         });
+        Ok(())
     }
 
     pub fn clear_request(&mut self) {
@@ -242,6 +257,22 @@ pub fn drive_simulation(world: &mut World) {
 
     if remaining_steps == 0 {
         return;
+    }
+
+    let invalid_domain_work = {
+        let state = world.resource::<SimulationDriverState>();
+        state
+            .driver
+            .backlog
+            .entries()
+            .into_iter()
+            .find(|work| work.cadence == Cadence::Tactical || work.domain_event_cost != 1)
+    };
+    if let Some(work) = invalid_domain_work {
+        panic!(
+            "invalid production domain work before execution: {:?}",
+            work
+        );
     }
 
     if world
