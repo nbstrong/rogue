@@ -98,6 +98,22 @@ impl<Id: Ord + Copy> WorkBacklog<Id> {
         }
     }
 
+    pub fn retain_where<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&DueWork<Id>) -> bool,
+    {
+        let entries: Vec<_> = self
+            .queue
+            .iter()
+            .map(|entry| entry.0)
+            .filter(|entry| keep(entry))
+            .collect();
+        self.queue.clear();
+        for entry in entries {
+            self.enqueue(entry);
+        }
+    }
+
     pub fn peek(&self) -> Option<&DueWork<Id>> {
         self.queue.peek().map(|entry| &entry.0)
     }
@@ -108,6 +124,10 @@ impl<Id: Ord + Copy> WorkBacklog<Id> {
 
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    pub fn entries(&self) -> Vec<DueWork<Id>> {
+        self.ordered_entries()
     }
 }
 

@@ -145,13 +145,22 @@ pub fn drive_simulation(world: &mut World) {
             .pending_target_minute()
             .unwrap_or_else(|| driver_state.driver.target_minute())
     };
+    sync_tactical_backlog(world);
 
     let mut processed_steps = 0usize;
     for _ in 0..budget.maximum_steps_per_frame {
-        if !continuing && *world.resource::<SimulationStatus>() != SimulationStatus::Resolving {
+        if *world.resource::<SimulationStatus>() != SimulationStatus::Resolving {
             break;
         }
-        if world.resource::<TurnClock>().current_tick > target {
+        let current_tick = world.resource::<TurnClock>().current_tick;
+        if current_tick > target {
+            break;
+        }
+        if world
+            .resource::<TurnClock>()
+            .peek_next()
+            .is_some_and(|entry| entry.next_tick > target)
+        {
             break;
         }
 
@@ -162,50 +171,73 @@ pub fn drive_simulation(world: &mut World) {
         processed_steps = processed_steps.saturating_add(1);
 
         let current_tick = world.resource::<TurnClock>().current_tick;
-        let backlog = turn_clock_to_backlog(world.resource::<TurnClock>());
+        let mut driver_state = world.resource_mut::<SimulationDriverState>();
+        driver_state.driver.progress.consume_step();
+        driver_state.driver.progress.consume_domain_events(produced);
+        driver_state.driver.clock.minute = current_tick;
+        drop(driver_state);
+        sync_tactical_backlog(world);
 
-        {
-            let mut driver_state = world.resource_mut::<SimulationDriverState>();
-            driver_state.driver.progress.consume_step();
-            driver_state.driver.progress.consume_domain_events(produced);
-            driver_state.driver.clock.minute = current_tick;
-            driver_state.driver.replace_backlog(backlog);
+        if *world.resource::<SimulationStatus>() != SimulationStatus::Resolving {
+            break;
         }
     }
 
-    let remaining_work = world.resource::<TurnClock>().peek_next().is_some();
     let still_resolving = *world.resource::<SimulationStatus>() == SimulationStatus::Resolving;
-    let pending_target = if continuing {
-        if remaining_work { Some(target) } else { None }
-    } else if still_resolving && remaining_work && processed_steps >= budget.maximum_steps_per_frame
-    {
-        Some(target)
-    } else {
-        None
-    };
+    let pending_target = if still_resolving { Some(target) } else { None };
 
     let current_tick = world.resource::<TurnClock>().current_tick;
-    let backlog = turn_clock_to_backlog(world.resource::<TurnClock>());
+    let tactical_entries = {
+        let clock = world.resource::<TurnClock>();
+        clock
+            .timeline
+            .iter()
+            .map(|entry| DueWork {
+                cadence: Cadence::Tactical,
+                due_minute: entry.0.next_tick,
+                sequence: entry.0.sequence,
+                id: entry.0.actor,
+                domain_event_cost: 1,
+            })
+            .collect::<Vec<_>>()
+    };
     let mut driver_state = world.resource_mut::<SimulationDriverState>();
     driver_state.driver.clock.minute = current_tick;
-    driver_state.driver.replace_backlog(backlog);
+    sync_tactical_backlog_in_driver(&mut driver_state.driver, tactical_entries);
     driver_state
         .driver
         .set_pending_target_minute(pending_target);
 }
 
-fn turn_clock_to_backlog(clock: &TurnClock) -> Vec<DueWork<ActorId>> {
-    let mut backlog = Vec::with_capacity(clock.timeline.len());
-    for entry in clock.timeline.iter() {
-        backlog.push(DueWork {
-            cadence: Cadence::Tactical,
-            due_minute: entry.0.next_tick,
-            sequence: entry.0.sequence,
-            id: entry.0.actor,
-            domain_event_cost: 1,
-        });
+fn sync_tactical_backlog(world: &mut World) {
+    let tactical_entries = {
+        let clock = world.resource::<TurnClock>();
+        clock
+            .timeline
+            .iter()
+            .map(|entry| DueWork {
+                cadence: Cadence::Tactical,
+                due_minute: entry.0.next_tick,
+                sequence: entry.0.sequence,
+                id: entry.0.actor,
+                domain_event_cost: 1,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut driver_state = world.resource_mut::<SimulationDriverState>();
+    sync_tactical_backlog_in_driver(&mut driver_state.driver, tactical_entries);
+}
+
+fn sync_tactical_backlog_in_driver(
+    driver: &mut DeterministicDriver<ActorId>,
+    tactical_entries: Vec<DueWork<ActorId>>,
+) {
+    driver
+        .backlog
+        .retain_where(|work| work.cadence != Cadence::Tactical);
+    for entry in tactical_entries {
+        driver.enqueue(entry);
     }
-    backlog
 }
 
 pub fn remove_dead_entities(

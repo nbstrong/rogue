@@ -21,7 +21,7 @@ use crate::world::map::{GridPosition, LevelId, LevelMap};
 use crate::world::spatial::SpatialIndex;
 use crate::world::tile::{Tile, TileKind};
 
-use super::migration::{LegacyGameSnapshotV1, SnapshotFile};
+use super::migration::{LegacyGameSnapshotV1, LegacyGameSnapshotV2, SnapshotFile};
 use super::rng::{RandomSnapshot, RandomStreams};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -228,7 +228,6 @@ pub struct GameSnapshot {
     pub timeline: Vec<ScheduledActorSnapshot>,
     pub pending_actions: Vec<ActionSnapshot>,
     pub pending_effects: Vec<EffectSnapshot>,
-    #[serde(default)]
     pub simulation_driver: SimulationDriverState,
     pub rng: RandomSnapshot,
 }
@@ -831,6 +830,18 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         }
     }
 
+    for work in snapshot.simulation_driver.driver.backlog.entries() {
+        if work.id.raw() == 0 {
+            return Err("simulation driver backlog contains invalid actor id 0".to_string());
+        }
+        if !actor_ids.contains(&work.id.raw()) {
+            return Err(format!(
+                "simulation driver backlog references missing actor {}",
+                work.id.raw()
+            ));
+        }
+    }
+
     for action in &snapshot.pending_actions {
         if !actor_ids.contains(&action.actor) {
             return Err(format!(
@@ -1195,21 +1206,10 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         pending_effects.push(effect_to_snapshot(effect)?);
     }
 
-    let mut simulation_driver = world
+    let simulation_driver = world
         .get_resource::<SimulationDriverState>()
         .cloned()
         .ok_or_else(|| "missing simulation driver resource".to_string())?;
-    simulation_driver.driver.clock.minute = clock.current_tick;
-    simulation_driver
-        .driver
-        .replace_backlog(turn_clock_to_backlog(clock));
-    if matches!(simulation_status, SimulationStatus::Resolving) {
-        simulation_driver
-            .driver
-            .set_pending_target_minute(Some(simulation_driver.driver.target_minute()));
-    } else {
-        simulation_driver.driver.set_pending_target_minute(None);
-    }
 
     if !matches!(
         *decision,
@@ -1279,20 +1279,6 @@ fn clear_simulation_state(world: &mut World) {
     world.remove_resource::<SimulationStatus>();
     world.remove_resource::<RandomStreams>();
     world.remove_resource::<PersistentIdAllocator>();
-}
-
-fn turn_clock_to_backlog(clock: &TurnClock) -> Vec<sim_core::DueWork<sim_core::ActorId>> {
-    let mut backlog = Vec::with_capacity(clock.timeline.len());
-    for entry in clock.timeline.iter() {
-        backlog.push(sim_core::DueWork {
-            cadence: sim_core::Cadence::Tactical,
-            due_minute: entry.0.next_tick,
-            sequence: entry.0.sequence,
-            id: entry.0.actor,
-            domain_event_cost: 1,
-        });
-    }
-    backlog
 }
 
 fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
@@ -1532,26 +1518,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         }
     }
 
-    let restored_backlog = {
-        let clock = world
-            .get_resource::<TurnClock>()
-            .ok_or_else(|| "missing turn clock after restore".to_string())?;
-        turn_clock_to_backlog(clock)
-    };
-
     if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
         *driver = snapshot.simulation_driver.clone();
-        driver.driver.clock.minute = snapshot.current_tick;
-        driver.driver.replace_backlog(restored_backlog);
-        let target_minute = driver.driver.target_minute();
-        if matches!(
-            snapshot.simulation_status,
-            SimulationStatusSnapshot::Resolving
-        ) {
-            driver.driver.set_pending_target_minute(Some(target_minute));
-        } else {
-            driver.driver.set_pending_target_minute(None);
-        }
     }
 
     if let Some(mut queue) = world.get_resource_mut::<ActionQueue>() {
@@ -1592,12 +1560,15 @@ pub fn digest_bytes(bytes: &[u8]) -> String {
 pub fn snapshot_from_bytes(bytes: &[u8]) -> SnapshotResult<SnapshotFile> {
     match ron::de::from_bytes::<GameSnapshot>(bytes) {
         Ok(snapshot) => Ok(SnapshotFile::Current(snapshot)),
-        Err(current_err) => match ron::de::from_bytes::<LegacyGameSnapshotV1>(bytes) {
-            Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
-            Err(legacy_err) => Err(format!(
-                "failed to deserialize current snapshot: {}; legacy snapshot: {}",
-                current_err, legacy_err
-            )),
+        Err(current_err) => match ron::de::from_bytes::<LegacyGameSnapshotV2>(bytes) {
+            Ok(snapshot) => Ok(SnapshotFile::V2(snapshot)),
+            Err(v2_err) => match ron::de::from_bytes::<LegacyGameSnapshotV1>(bytes) {
+                Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
+                Err(v1_err) => Err(format!(
+                    "failed to deserialize current snapshot: {}; v2 snapshot: {}; legacy snapshot: {}",
+                    current_err, v2_err, v1_err
+                )),
+            },
         },
     }
 }
@@ -1609,12 +1580,15 @@ pub fn snapshot_to_bytes(snapshot: &GameSnapshot) -> SnapshotResult<Vec<u8>> {
 pub fn snapshot_from_text(text: &str) -> SnapshotResult<SnapshotFile> {
     match ron::from_str::<GameSnapshot>(text) {
         Ok(snapshot) => Ok(SnapshotFile::Current(snapshot)),
-        Err(current_err) => match ron::from_str::<LegacyGameSnapshotV1>(text) {
-            Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
-            Err(legacy_err) => Err(format!(
-                "failed to deserialize current snapshot: {}; legacy snapshot: {}",
-                current_err, legacy_err
-            )),
+        Err(current_err) => match ron::from_str::<LegacyGameSnapshotV2>(text) {
+            Ok(snapshot) => Ok(SnapshotFile::V2(snapshot)),
+            Err(v2_err) => match ron::from_str::<LegacyGameSnapshotV1>(text) {
+                Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
+                Err(v1_err) => Err(format!(
+                    "failed to deserialize current snapshot: {}; v2 snapshot: {}; legacy snapshot: {}",
+                    current_err, v2_err, v1_err
+                )),
+            },
         },
     }
 }

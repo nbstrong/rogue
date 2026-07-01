@@ -16,6 +16,7 @@ use rogue_core::actor::components::{
 use rogue_core::actor::spawn::spawn_vertical_slice;
 use rogue_core::item::components::{Inventory, Item};
 use rogue_core::item::effects::{Effect, EffectQueue, apply_pending_effects};
+use rogue_core::persistence::migration::LegacyGameSnapshotV2;
 use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot};
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
@@ -503,6 +504,73 @@ fn legacy_snapshot_v1_is_migrated() {
 }
 
 #[test]
+fn legacy_snapshot_v2_is_migrated() {
+    let snapshot = run_replay(&load_fixture());
+    let legacy = LegacyGameSnapshotV2 {
+        version: 2,
+        root_seed: snapshot.root_seed,
+        current_level: snapshot.current_level,
+        current_tick: snapshot.current_tick,
+        next_sequence: snapshot.next_sequence,
+        current_actor: snapshot.current_actor,
+        simulation_status: snapshot.simulation_status,
+        persistent_ids: snapshot.persistent_ids.clone(),
+        levels: snapshot.levels.clone(),
+        entities: snapshot.entities.clone(),
+        timeline: snapshot.timeline.clone(),
+        pending_actions: snapshot.pending_actions.clone(),
+        pending_effects: snapshot.pending_effects.clone(),
+        rng: snapshot.rng.clone(),
+    };
+
+    let text = ron::ser::to_string(&legacy).expect("serialize legacy v2 snapshot");
+    let migrated = migrate_snapshot(snapshot_from_text(&text).expect("deserialize legacy v2"))
+        .expect("migrate legacy v2 snapshot");
+
+    assert_eq!(migrated, snapshot);
+}
+
+#[test]
+fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    let player = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Player>>();
+        let (_, stable_id) = query.iter(world).next().expect("player entity");
+        stable_id.0
+    };
+    {
+        let mut driver = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        driver.driver.enqueue(sim_core::DueWork {
+            cadence: sim_core::Cadence::Hour,
+            due_minute: 12,
+            sequence: 99,
+            id: player,
+            domain_event_cost: 2,
+        });
+    }
+
+    let snapshot = snapshot_world(app.world()).expect("snapshot");
+    let text = snapshot_to_text(&snapshot).expect("serialize");
+    let restored = match snapshot_from_text(&text).expect("deserialize") {
+        rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V1(_) => {
+            panic!("snapshot should not downgrade")
+        }
+        rogue_core::persistence::migration::SnapshotFile::V2(_) => {
+            panic!("snapshot should not downgrade")
+        }
+    };
+
+    assert_eq!(snapshot, restored);
+}
+
+#[test]
 fn replay_advances_all_authoritative_rng_streams() {
     let fixture = load_fixture();
     let snapshot = run_replay(&fixture);
@@ -525,6 +593,9 @@ fn continuation_after_restore_matches_the_original_world() {
     let prefix_text = snapshot_to_text(&prefix_snapshot).expect("serialize prefix");
     let restored_snapshot = match snapshot_from_text(&prefix_text).expect("deserialize prefix") {
         rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V2(_) => {
+            panic!("prefix snapshot unexpectedly downgraded")
+        }
         rogue_core::persistence::migration::SnapshotFile::V1(_) => {
             panic!("prefix snapshot unexpectedly downgraded")
         }
@@ -1005,6 +1076,9 @@ fn nonzero_level_ids_survive_restore_and_resave() {
     let text = snapshot_to_text(&snapshot).expect("serialize");
     let restored = match snapshot_from_text(&text).expect("deserialize") {
         rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V2(_) => {
+            panic!("nonzero level snapshot should not downgrade")
+        }
         rogue_core::persistence::migration::SnapshotFile::V1(_) => {
             panic!("nonzero level snapshot should not downgrade")
         }
@@ -1111,6 +1185,9 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
     let text = snapshot_to_text(&snapshot).expect("serialize");
     let restored = match snapshot_from_text(&text).expect("deserialize") {
         rogue_core::persistence::migration::SnapshotFile::Current(snapshot) => snapshot,
+        rogue_core::persistence::migration::SnapshotFile::V2(_) => {
+            panic!("status snapshot should not downgrade")
+        }
         rogue_core::persistence::migration::SnapshotFile::V1(_) => {
             panic!("status snapshot should not downgrade")
         }
