@@ -347,22 +347,11 @@ pub fn drive_simulation(world: &mut World) {
 pub fn remove_dead_entities(
     mut commands: Commands<'_, '_>,
     query: Query<'_, '_, (Entity, &crate::actor::components::Health)>,
-    players: Query<'_, '_, Entity, With<crate::actor::components::Player>>,
-    mut status: ResMut<'_, SimulationStatus>,
 ) {
     for (entity, health) in query.iter() {
         if health.current <= 0 {
             commands.entity(entity).despawn();
         }
-    }
-
-    let player_exists = players.iter().any(|entity| {
-        query
-            .get(entity)
-            .is_ok_and(|(_, health)| health.current > 0)
-    });
-    if !player_exists {
-        *status = SimulationStatus::GameOver;
     }
 }
 
