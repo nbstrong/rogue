@@ -3,6 +3,7 @@ use std::collections::BinaryHeap;
 
 use crate::time::{SimClock, SimSpeed};
 use crate::work_budget::{SimulationWorkBudget, WorkBudgetProgress};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -168,11 +169,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "Id: Serialize + Ord + Copy + Eq",
-    deserialize = "Id: Deserialize<'de> + Ord + Copy + Eq"
-))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeterministicDriver<Id: Ord + Copy + Eq> {
     pub clock: SimClock,
     pub budget: SimulationWorkBudget,
@@ -190,6 +187,57 @@ impl<Id: Ord + Copy + Eq> Default for DeterministicDriver<Id> {
             backlog: WorkBacklog::default(),
             pending_target_minute: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Id: Serialize + Ord + Copy + Eq",
+    deserialize = "Id: Deserialize<'de> + Ord + Copy + Eq"
+))]
+struct DeterministicDriverSnapshot<Id: Ord + Copy + Eq> {
+    clock: SimClock,
+    backlog: Vec<DueWork<Id>>,
+    pending_target_minute: Option<u64>,
+}
+
+impl<Id: Ord + Copy + Eq + Serialize> Serialize for DeterministicDriver<Id> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let snapshot = DeterministicDriverSnapshot {
+            clock: self.clock,
+            backlog: self
+                .backlog
+                .entries()
+                .into_iter()
+                .filter(|work| work.cadence != Cadence::Tactical)
+                .collect(),
+            pending_target_minute: self.pending_target_minute,
+        };
+        let mut state = serializer.serialize_struct("DeterministicDriver", 3)?;
+        state.serialize_field("clock", &snapshot.clock)?;
+        state.serialize_field("backlog", &snapshot.backlog)?;
+        state.serialize_field("pending_target_minute", &snapshot.pending_target_minute)?;
+        state.end()
+    }
+}
+
+impl<'de, Id> Deserialize<'de> for DeterministicDriver<Id>
+where
+    Id: Deserialize<'de> + Ord + Copy + Eq,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let snapshot = DeterministicDriverSnapshot::<Id>::deserialize(deserializer)?;
+        let mut driver = Self::default();
+        driver.clock = snapshot.clock;
+        driver.backlog.replace_with(snapshot.backlog);
+        driver.pending_target_minute = snapshot.pending_target_minute;
+        Ok(driver)
     }
 }
 

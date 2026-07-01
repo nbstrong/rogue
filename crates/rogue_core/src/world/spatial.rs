@@ -61,6 +61,10 @@ impl SpatialIndex {
     ) {
         let order = Self::occupant_order(entity, stable_actor, stable_item, persistent_id);
         if matches!(order, SpatialOccupantOrder::Unstable) {
+            assert!(
+                !blocks_movement && !blocks_sight,
+                "unstable occupant cannot block movement or sight"
+            );
             return;
         }
         let key = (position.level, position.cell);

@@ -531,6 +531,21 @@ fn legacy_snapshot_v2_is_migrated() {
 }
 
 #[test]
+fn version_two_current_shape_is_upgraded() {
+    let snapshot = run_replay(&load_fixture());
+    let mut legacy_shape = snapshot.clone();
+    legacy_shape.version = 2;
+
+    let migrated = migrate_snapshot(rogue_core::persistence::migration::SnapshotFile::Current(
+        legacy_shape,
+    ))
+    .expect("migrate version two current shape");
+
+    assert_eq!(migrated.version, CURRENT_SAVE_VERSION);
+    assert_eq!(migrated, snapshot);
+}
+
+#[test]
 fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
@@ -601,7 +616,19 @@ fn continuation_after_restore_matches_the_original_world() {
         }
     };
 
-    assert_eq!(prefix_snapshot, restored_snapshot);
+    let mut normalized_prefix = prefix_snapshot.clone();
+    normalized_prefix.simulation_driver.driver.progress = Default::default();
+    normalized_prefix.simulation_driver.driver.budget = Default::default();
+
+    let mut normalized_restored = restored_snapshot.clone();
+    normalized_restored.simulation_driver.driver.progress = Default::default();
+    normalized_restored.simulation_driver.driver.budget = Default::default();
+
+    assert_eq!(normalized_prefix, normalized_restored);
+    assert_eq!(
+        snapshot_digest(&prefix_snapshot).expect("prefix digest"),
+        snapshot_digest(&restored_snapshot).expect("restored digest")
+    );
 }
 
 #[test]
@@ -1336,7 +1363,8 @@ fn spatial_index_orders_occupants_by_stable_identity() {
 }
 
 #[test]
-fn unstable_occupants_are_not_included_in_authoritative_spatial_ordering() {
+#[should_panic(expected = "unstable occupant cannot block movement or sight")]
+fn unstable_blockers_are_rejected() {
     let mut spatial = SpatialIndex::default();
     let level = LevelId(0);
     let cell = IVec2::new(4, 4);
@@ -1362,6 +1390,5 @@ fn unstable_occupants_are_not_included_in_authoritative_spatial_ordering() {
         false,
     );
 
-    let occupants: Vec<_> = spatial.occupants_at(level, cell).collect();
-    assert!(occupants.is_empty());
+    let _ = spatial.occupants_at(level, cell).collect::<Vec<_>>();
 }

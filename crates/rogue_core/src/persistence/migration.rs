@@ -57,6 +57,10 @@ pub fn migrate_snapshot(snapshot: SnapshotFile) -> Result<GameSnapshot, String> 
     match snapshot {
         SnapshotFile::Current(snapshot) => match snapshot.version {
             CURRENT_SAVE_VERSION => Ok(snapshot),
+            2 => Ok(GameSnapshot {
+                version: CURRENT_SAVE_VERSION,
+                ..snapshot
+            }),
             version if version > CURRENT_SAVE_VERSION => Err(format!(
                 "snapshot version {} is newer than supported version {}",
                 version, CURRENT_SAVE_VERSION
@@ -146,28 +150,18 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
 fn snapshot_driver_from_legacy(
     current_tick: u64,
     simulation_status: SimulationStatusSnapshot,
-    timeline: &[crate::persistence::snapshot::ScheduledActorSnapshot],
+    _timeline: &[crate::persistence::snapshot::ScheduledActorSnapshot],
 ) -> Result<SimulationDriverState, String> {
     let mut simulation_driver = SimulationDriverState::default();
     simulation_driver.driver.clock.minute = current_tick;
-    simulation_driver.driver.backlog.clear();
-    for entry in timeline {
-        simulation_driver.driver.enqueue(sim_core::DueWork {
-            cadence: sim_core::Cadence::Tactical,
-            due_minute: entry.next_tick,
-            sequence: entry.sequence,
-            id: sim_core::ActorId::new(entry.actor)
-                .ok_or_else(|| format!("invalid actor id {}", entry.actor))?,
-            domain_event_cost: 1,
-        });
-    }
     simulation_driver.driver.set_pending_target_minute(
         if matches!(simulation_status, SimulationStatusSnapshot::Resolving) {
-            Some(simulation_driver.driver.target_minute())
+            Some(current_tick)
         } else {
             None
         },
     );
     simulation_driver.driver.progress = Default::default();
+    simulation_driver.driver.backlog.clear();
     Ok(simulation_driver)
 }

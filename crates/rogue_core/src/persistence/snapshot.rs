@@ -20,6 +20,7 @@ use crate::world::fov::recalculate_fov_for_player;
 use crate::world::map::{GridPosition, LevelId, LevelMap};
 use crate::world::spatial::SpatialIndex;
 use crate::world::tile::{Tile, TileKind};
+use sim_core::Cadence;
 
 use super::migration::{LegacyGameSnapshotV1, LegacyGameSnapshotV2, SnapshotFile};
 use super::rng::{RandomSnapshot, RandomStreams};
@@ -585,13 +586,12 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     }
     match snapshot.simulation_status {
         SimulationStatusSnapshot::Resolving => {
-            if snapshot
-                .simulation_driver
-                .driver
-                .pending_target_minute()
-                .is_none()
-            {
+            let pending_target = snapshot.simulation_driver.driver.pending_target_minute();
+            if pending_target.is_none() {
                 return Err("resolving snapshots must keep a pending target minute".to_string());
+            }
+            if pending_target.is_some_and(|target| target < snapshot.current_tick) {
+                return Err("resolving snapshots cannot target an earlier minute".to_string());
             }
         }
         SimulationStatusSnapshot::WaitingForPlayer | SimulationStatusSnapshot::GameOver => {
@@ -1206,10 +1206,14 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         pending_effects.push(effect_to_snapshot(effect)?);
     }
 
-    let simulation_driver = world
+    let mut simulation_driver = world
         .get_resource::<SimulationDriverState>()
         .cloned()
         .ok_or_else(|| "missing simulation driver resource".to_string())?;
+    simulation_driver
+        .driver
+        .backlog
+        .retain_where(|work| work.cadence != Cadence::Tactical);
 
     if !matches!(
         *decision,
@@ -1519,7 +1523,35 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
     }
 
     if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
-        *driver = snapshot.simulation_driver.clone();
+        let mut restored_driver = snapshot.simulation_driver.clone();
+        let non_tactical_backlog = restored_driver
+            .driver
+            .backlog
+            .entries()
+            .into_iter()
+            .filter(|work| work.cadence != Cadence::Tactical)
+            .collect::<Vec<_>>();
+        let tactical_backlog = snapshot
+            .timeline
+            .iter()
+            .map(|entry| {
+                Ok(sim_core::DueWork {
+                    cadence: Cadence::Tactical,
+                    due_minute: entry.next_tick,
+                    sequence: entry.sequence,
+                    id: sim_core::ActorId::new(entry.actor)
+                        .ok_or_else(|| format!("invalid actor id {}", entry.actor))?,
+                    domain_event_cost: 1,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        restored_driver.driver.backlog.clear();
+        restored_driver.driver.replace_backlog(
+            non_tactical_backlog
+                .into_iter()
+                .chain(tactical_backlog.into_iter()),
+        );
+        *driver = restored_driver;
     }
 
     if let Some(mut queue) = world.get_resource_mut::<ActionQueue>() {

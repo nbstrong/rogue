@@ -215,7 +215,7 @@ fn driver_exposes_the_due_clock_to_callbacks() {
 }
 
 #[test]
-fn driver_roundtrip_preserves_backlog_and_progress() {
+fn driver_roundtrip_preserves_semantic_state() {
     let mut driver = DeterministicDriver::<u64>::default();
     driver.budget = SimulationWorkBudget {
         maximum_steps_per_frame: 1,
@@ -247,6 +247,21 @@ fn driver_roundtrip_preserves_backlog_and_progress() {
 
     let mut uninterrupted = driver.clone();
 
+    assert_eq!(restored.clock.minute, uninterrupted.clock.minute);
+    assert_eq!(
+        restored.pending_target_minute(),
+        uninterrupted.pending_target_minute()
+    );
+    assert_eq!(
+        restored.backlog.peek().map(|work| work.id),
+        uninterrupted.backlog.peek().map(|work| work.id)
+    );
+    assert_eq!(restored.progress, Default::default());
+    assert_eq!(restored.budget, Default::default());
+
+    restored.budget = driver.budget;
+    uninterrupted.budget = driver.budget;
+
     let mut resumed_processed = Vec::new();
     restored.begin_frame();
     restored
@@ -267,7 +282,10 @@ fn driver_roundtrip_preserves_backlog_and_progress() {
 
     assert_eq!(resumed_processed, expected_processed);
     assert_eq!(restored.clock.minute, uninterrupted.clock.minute);
-    assert_eq!(restored.progress, uninterrupted.progress);
+    assert_eq!(
+        restored.pending_target_minute(),
+        uninterrupted.pending_target_minute()
+    );
     assert_eq!(
         restored.backlog.peek().map(|work| work.id),
         uninterrupted.backlog.peek().map(|work| work.id)

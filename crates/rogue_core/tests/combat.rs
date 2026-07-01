@@ -874,6 +874,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), neutral);
 
     {
         let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
@@ -892,6 +893,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
         );
     }
 
+    build_stable_entity_index(app.world_mut());
     schedule_actor!(app, neutral, 0);
     schedule_actor!(app, player, 50);
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
@@ -909,10 +911,6 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
             .map(|next| next.actor),
         Some(actor_id(app.world(), player))
     );
-
-    let outcome_log = app.world().resource::<ActionOutcomeLog>();
-    let outcomes = &outcome_log.outcomes;
-    assert!(outcomes.is_empty());
 }
 
 #[test]

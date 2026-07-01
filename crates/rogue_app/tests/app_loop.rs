@@ -143,6 +143,30 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Numpad6);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::Numpad6);
+
+    let second_player = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+
+    assert_eq!(second_player.cell, after_player.cell + IVec2::new(1, 0));
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
 }
 
 #[test]
