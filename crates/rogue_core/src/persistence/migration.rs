@@ -5,6 +5,7 @@ use crate::persistence::snapshot::{
     ActionSnapshot, EffectSnapshot, EntitySnapshot, GameSnapshot, LevelSnapshot,
     PersistentIdAllocatorSnapshot, ScheduledActorSnapshot, SimulationStatusSnapshot,
 };
+use crate::simulation::SimulationDriverState;
 use sim_core::persistence::version::CURRENT_SCHEMA_VERSION;
 
 pub const CURRENT_SAVE_VERSION: u32 = CURRENT_SCHEMA_VERSION;
@@ -57,6 +58,19 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
                 .max()
                 .map(|sequence| sequence.saturating_add(1))
                 .unwrap_or(0);
+            let mut simulation_driver = SimulationDriverState::default();
+            simulation_driver.driver.clock.minute = snapshot.current_tick;
+            simulation_driver
+                .driver
+                .replace_backlog(snapshot_timeline_to_backlog(&snapshot.timeline));
+            if matches!(
+                snapshot.simulation_status,
+                SimulationStatusSnapshot::Resolving
+            ) {
+                simulation_driver
+                    .driver
+                    .set_pending_target_minute(Some(simulation_driver.driver.target_minute()));
+            }
 
             Ok(GameSnapshot {
                 version: CURRENT_SAVE_VERSION,
@@ -72,6 +86,7 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
                 timeline: snapshot.timeline,
                 pending_actions: snapshot.pending_actions,
                 pending_effects: snapshot.pending_effects,
+                simulation_driver,
                 rng: snapshot.rng,
             })
         }
@@ -81,4 +96,20 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
         )),
         version => Err(format!("unsupported legacy snapshot version {}", version)),
     }
+}
+
+fn snapshot_timeline_to_backlog(
+    timeline: &[crate::persistence::snapshot::ScheduledActorSnapshot],
+) -> Vec<sim_core::DueWork<sim_core::ActorId>> {
+    let mut backlog = Vec::with_capacity(timeline.len());
+    for entry in timeline {
+        backlog.push(sim_core::DueWork {
+            cadence: sim_core::Cadence::Tactical,
+            due_minute: entry.next_tick,
+            sequence: entry.sequence,
+            id: sim_core::ActorId::new(entry.actor).expect("legacy snapshot actor id"),
+            domain_event_cost: 1,
+        });
+    }
+    backlog
 }

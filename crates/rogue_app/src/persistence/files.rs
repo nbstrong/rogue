@@ -207,7 +207,7 @@ mod tests {
     };
     use rogue_core::item::effects::EffectQueue;
     use rogue_core::persistence::rng::RandomStreams;
-    use rogue_core::simulation::SimulationStatus;
+    use rogue_core::simulation::{SimulationDriverState, SimulationStatus};
     use rogue_core::time::clock::{CurrentActor, TurnClock};
     use rogue_core::world::generation::generate_one_room;
     use rogue_core::world::map::{GridPosition, LevelId};
@@ -226,6 +226,7 @@ mod tests {
         world.insert_resource(ActionDecision::default());
         world.insert_resource(CurrentActor::default());
         world.insert_resource(TurnClock::default());
+        world.insert_resource(SimulationDriverState::default());
         world.insert_resource(SimulationStatus::WaitingForPlayer);
         let player = world
             .spawn((
@@ -314,6 +315,7 @@ mod tests {
         loaded.insert_resource(ActionDecision::default());
         loaded.insert_resource(CurrentActor::default());
         loaded.insert_resource(TurnClock::default());
+        loaded.insert_resource(SimulationDriverState::default());
         loaded.insert_resource(SimulationStatus::WaitingForPlayer);
 
         load_world_from_path(&mut loaded, &save_name).expect("load bare filename");

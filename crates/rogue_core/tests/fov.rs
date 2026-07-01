@@ -1,7 +1,7 @@
 use bevy_app::App;
 use bevy_math::IVec2;
 use rogue_core::actor::components::Vision;
-use rogue_core::actor::components::{BlocksSight, Player};
+use rogue_core::actor::components::{BlocksSight, PersistentId, Player};
 use rogue_core::simulation::SimulationPlugin;
 use rogue_core::simulation::SimulationStep;
 use rogue_core::world::fov::recalculate_fov_for_player;
@@ -137,6 +137,7 @@ fn moving_a_sight_blocker_updates_visibility_on_the_next_pipeline_step() {
         .world_mut()
         .spawn((
             BlocksSight,
+            PersistentId(1),
             GridPosition {
                 level,
                 cell: blocker_cell,

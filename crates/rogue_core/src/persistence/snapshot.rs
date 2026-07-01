@@ -14,7 +14,7 @@ use crate::actor::components::{
 };
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
-use crate::simulation::SimulationStatus;
+use crate::simulation::{SimulationDriverState, SimulationStatus};
 use crate::time::clock::{CurrentActor, ScheduledActor, TurnClock};
 use crate::world::fov::recalculate_fov_for_player;
 use crate::world::map::{GridPosition, LevelId, LevelMap};
@@ -228,6 +228,8 @@ pub struct GameSnapshot {
     pub timeline: Vec<ScheduledActorSnapshot>,
     pub pending_actions: Vec<ActionSnapshot>,
     pub pending_effects: Vec<EffectSnapshot>,
+    #[serde(default)]
+    pub simulation_driver: SimulationDriverState,
     pub rng: RandomSnapshot,
 }
 
@@ -579,17 +581,30 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         return Err("snapshot does not contain any levels".to_string());
     }
 
-    if !snapshot.pending_actions.is_empty() {
-        return Err("snapshot pending actions require a stable save boundary".to_string());
+    if snapshot.simulation_driver.driver.clock.minute != snapshot.current_tick {
+        return Err("simulation driver clock must match the turn clock".to_string());
     }
-    if !snapshot.pending_effects.is_empty() {
-        return Err("snapshot pending effects require a stable save boundary".to_string());
-    }
-    if matches!(
-        snapshot.simulation_status,
-        SimulationStatusSnapshot::Resolving
-    ) {
-        return Err("snapshot resolving status requires a stable save boundary".to_string());
+    match snapshot.simulation_status {
+        SimulationStatusSnapshot::Resolving => {
+            if snapshot
+                .simulation_driver
+                .driver
+                .pending_target_minute()
+                .is_none()
+            {
+                return Err("resolving snapshots must keep a pending target minute".to_string());
+            }
+        }
+        SimulationStatusSnapshot::WaitingForPlayer | SimulationStatusSnapshot::GameOver => {
+            if snapshot
+                .simulation_driver
+                .driver
+                .pending_target_minute()
+                .is_some()
+            {
+                return Err("settled snapshots must clear the pending target minute".to_string());
+            }
+        }
     }
 
     let max_entity_id = ids.iter().copied().max().unwrap_or(0);
@@ -1180,6 +1195,22 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         pending_effects.push(effect_to_snapshot(effect)?);
     }
 
+    let mut simulation_driver = world
+        .get_resource::<SimulationDriverState>()
+        .cloned()
+        .ok_or_else(|| "missing simulation driver resource".to_string())?;
+    simulation_driver.driver.clock.minute = clock.current_tick;
+    simulation_driver
+        .driver
+        .replace_backlog(turn_clock_to_backlog(clock));
+    if matches!(simulation_status, SimulationStatus::Resolving) {
+        simulation_driver
+            .driver
+            .set_pending_target_minute(Some(simulation_driver.driver.target_minute()));
+    } else {
+        simulation_driver.driver.set_pending_target_minute(None);
+    }
+
     if !matches!(
         *decision,
         crate::action::resolver::ActionDecision::Idle
@@ -1187,14 +1218,6 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     ) {
         return Err("snapshot requires an idle or waiting action decision".to_string());
     }
-    if !action_queue.actions.is_empty()
-        || !effect_queue.0.is_empty()
-        || simulation_status != SimulationStatus::WaitingForPlayer
-            && simulation_status != SimulationStatus::GameOver
-    {
-        return Err("snapshot requires a stable save boundary".to_string());
-    }
-
     let simulation_status = SimulationStatusSnapshot::from(simulation_status);
 
     let levels = vec![build_level_snapshot(map)];
@@ -1212,6 +1235,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         timeline: timeline.clone(),
         pending_actions: pending_actions.clone(),
         pending_effects: pending_effects.clone(),
+        simulation_driver: simulation_driver.clone(),
         rng: rng.snapshot(),
     })?;
 
@@ -1229,6 +1253,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         timeline,
         pending_actions,
         pending_effects,
+        simulation_driver,
         rng: rng.snapshot(),
     })
 }
@@ -1250,9 +1275,24 @@ fn clear_simulation_state(world: &mut World) {
     world.remove_resource::<TurnClock>();
     world.remove_resource::<CurrentActor>();
     world.remove_resource::<StableEntityIndex>();
+    world.remove_resource::<SimulationDriverState>();
     world.remove_resource::<SimulationStatus>();
     world.remove_resource::<RandomStreams>();
     world.remove_resource::<PersistentIdAllocator>();
+}
+
+fn turn_clock_to_backlog(clock: &TurnClock) -> Vec<sim_core::DueWork<sim_core::ActorId>> {
+    let mut backlog = Vec::with_capacity(clock.timeline.len());
+    for entry in clock.timeline.iter() {
+        backlog.push(sim_core::DueWork {
+            cadence: sim_core::Cadence::Tactical,
+            due_minute: entry.0.next_tick,
+            sequence: entry.0.sequence,
+            id: entry.0.actor,
+            domain_event_cost: 1,
+        });
+    }
+    backlog
 }
 
 fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
@@ -1341,6 +1381,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
     });
     world.insert_resource(CurrentActor::default());
     world.insert_resource(StableEntityIndex::default());
+    world.insert_resource(SimulationDriverState::default());
     world.insert_resource(SimulationStatus::from(snapshot.simulation_status.clone()));
 
     let mut entity_map = HashMap::new();
@@ -1488,6 +1529,28 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
                 actor: sim_core::ActorId::new(entry.actor)
                     .ok_or_else(|| format!("invalid actor id {}", entry.actor))?,
             }));
+        }
+    }
+
+    let restored_backlog = {
+        let clock = world
+            .get_resource::<TurnClock>()
+            .ok_or_else(|| "missing turn clock after restore".to_string())?;
+        turn_clock_to_backlog(clock)
+    };
+
+    if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
+        *driver = snapshot.simulation_driver.clone();
+        driver.driver.clock.minute = snapshot.current_tick;
+        driver.driver.replace_backlog(restored_backlog);
+        let target_minute = driver.driver.target_minute();
+        if matches!(
+            snapshot.simulation_status,
+            SimulationStatusSnapshot::Resolving
+        ) {
+            driver.driver.set_pending_target_minute(Some(target_minute));
+        } else {
+            driver.driver.set_pending_target_minute(None);
         }
     }
 

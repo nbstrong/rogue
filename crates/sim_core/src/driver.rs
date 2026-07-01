@@ -74,8 +74,28 @@ impl<Id> Default for WorkBacklog<Id> {
 }
 
 impl<Id: Ord + Copy> WorkBacklog<Id> {
+    fn ordered_entries(&self) -> Vec<DueWork<Id>> {
+        let mut entries: Vec<_> = self.queue.iter().map(|entry| entry.0).collect();
+        entries.sort();
+        entries
+    }
+
     pub fn enqueue(&mut self, work: DueWork<Id>) {
         self.queue.push(Reverse(work));
+    }
+
+    pub fn clear(&mut self) {
+        self.queue.clear();
+    }
+
+    pub fn replace_with<I>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = DueWork<Id>>,
+    {
+        self.queue.clear();
+        for work in entries {
+            self.enqueue(work);
+        }
     }
 
     pub fn peek(&self) -> Option<&DueWork<Id>> {
@@ -90,6 +110,14 @@ impl<Id: Ord + Copy> WorkBacklog<Id> {
         self.queue.is_empty()
     }
 }
+
+impl<Id: Ord + Copy + Eq> PartialEq for WorkBacklog<Id> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ordered_entries() == other.ordered_entries()
+    }
+}
+
+impl<Id: Ord + Copy + Eq> Eq for WorkBacklog<Id> {}
 
 impl<Id: Serialize + Ord + Copy> Serialize for WorkBacklog<Id> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -120,12 +148,12 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "Id: Serialize + Ord + Copy",
-    deserialize = "Id: Deserialize<'de> + Ord + Copy"
+    serialize = "Id: Serialize + Ord + Copy + Eq",
+    deserialize = "Id: Deserialize<'de> + Ord + Copy + Eq"
 ))]
-pub struct DeterministicDriver<Id> {
+pub struct DeterministicDriver<Id: Ord + Copy + Eq> {
     pub clock: SimClock,
     pub budget: SimulationWorkBudget,
     pub progress: WorkBudgetProgress,
@@ -133,7 +161,7 @@ pub struct DeterministicDriver<Id> {
     pending_target_minute: Option<u64>,
 }
 
-impl<Id> Default for DeterministicDriver<Id> {
+impl<Id: Ord + Copy + Eq> Default for DeterministicDriver<Id> {
     fn default() -> Self {
         Self {
             clock: SimClock::default(),
@@ -145,9 +173,20 @@ impl<Id> Default for DeterministicDriver<Id> {
     }
 }
 
-impl<Id: Ord + Copy> DeterministicDriver<Id> {
+impl<Id: Ord + Copy + Eq> DeterministicDriver<Id> {
     pub fn enqueue(&mut self, work: DueWork<Id>) {
         self.backlog.enqueue(work);
+    }
+
+    pub fn clear_backlog(&mut self) {
+        self.backlog.clear();
+    }
+
+    pub fn replace_backlog<I>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = DueWork<Id>>,
+    {
+        self.backlog.replace_with(entries);
     }
 
     pub fn begin_frame(&mut self) {
@@ -161,6 +200,14 @@ impl<Id: Ord + Copy> DeterministicDriver<Id> {
         self.clock
             .minute
             .saturating_add(self.clock.speed.advance_minutes())
+    }
+
+    pub fn pending_target_minute(&self) -> Option<u64> {
+        self.pending_target_minute
+    }
+
+    pub fn set_pending_target_minute(&mut self, pending_target_minute: Option<u64>) {
+        self.pending_target_minute = pending_target_minute;
     }
 
     pub fn run_frame<F>(&mut self, mut apply: F) -> Result<(), DriverError<Id>>

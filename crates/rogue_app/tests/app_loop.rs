@@ -8,6 +8,7 @@ use rogue_app::game::{HudText, LogText};
 use rogue_app::input::InputPlugin;
 use rogue_app::persistence::{load_world_from_path, save_world_to_path};
 use rogue_app::presentation::PresentationPlugin;
+use rogue_app::presentation::PresentationRngState;
 use rogue_app::ui::GameUiPlugin;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::Health;
@@ -348,6 +349,10 @@ fn presentation_only_mutations_do_not_change_the_snapshot_digest() {
     let before = snapshot_world(app.world()).expect("before snapshot");
     let before_digest = snapshot_digest(&before).expect("before digest");
 
+    if let Some(mut presentation_rng) = app.world_mut().get_resource_mut::<PresentationRngState>() {
+        let _ = presentation_rng.0.next_u64();
+        let _ = presentation_rng.0.next_u64();
+    }
     if let Some(mut views) = app
         .world_mut()
         .get_resource_mut::<rogue_app::game::MapViews>()
@@ -372,6 +377,29 @@ fn presentation_only_mutations_do_not_change_the_snapshot_digest() {
     {
         health.values.clear();
     }
+
+    let after = snapshot_world(app.world()).expect("after snapshot");
+    let after_digest = snapshot_digest(&after).expect("after digest");
+
+    assert_eq!(before, after);
+    assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn extra_presentation_updates_do_not_change_the_authoritative_snapshot() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    let before_digest = snapshot_digest(&before).expect("before digest");
+
+    app.update();
+    app.update();
+    app.update();
 
     let after = snapshot_world(app.world()).expect("after snapshot");
     let after_digest = snapshot_digest(&after).expect("after digest");

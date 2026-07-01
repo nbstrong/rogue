@@ -15,6 +15,7 @@ use rogue_core::content::registry::ContentRegistry;
 use rogue_core::item::components::{Inventory, Item};
 use rogue_core::item::effects::EffectQueue;
 use rogue_core::persistence::rng::RandomStreams;
+use rogue_core::simulation::SimulationDriverState;
 use rogue_core::simulation::SimulationStatus;
 use rogue_core::time::clock::{CurrentActor, TurnClock};
 use rogue_core::world::fov::recalculate_fov_for_player;
@@ -143,9 +144,11 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.remove_resource::<ActionOutcomeLog>();
     world.remove_resource::<CurrentActor>();
     world.remove_resource::<StableEntityIndex>();
+    world.remove_resource::<SimulationDriverState>();
     world.insert_resource(RandomStreams::seeded(0));
     world.insert_resource(PersistentIdAllocator::default());
     world.insert_resource(StableEntityIndex::default());
+    world.insert_resource(SimulationDriverState::default());
 
     let player_def = world
         .resource::<ContentRegistry>()

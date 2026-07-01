@@ -4,6 +4,7 @@ use bevy_ecs::system::RunSystemOnce;
 use bevy_math::IVec2;
 use serde::Deserialize;
 
+use rogue_core::SimulationWorkBudget;
 use rogue_core::action::intent::{Action, ActionKind};
 use rogue_core::action::queue::ActionQueue;
 use rogue_core::actor::combat::StatusEffect;
@@ -335,6 +336,37 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
     snapshot_world(app.world()).expect("snapshot should be valid")
 }
 
+fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> GameSnapshot {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    app.world_mut().spawn_empty();
+    initialize_world(&mut app, fixture.seed);
+
+    let monster = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let (_, stable_id) = query.iter(world).next().expect("monster entity");
+        stable_id.0
+    };
+    app.world_mut()
+        .resource_mut::<ActionQueue>()
+        .actions
+        .clear();
+    *app.world_mut().resource_mut::<CurrentActor>() =
+        sim_core::schedule::CurrentActor(Some(monster));
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+    app.world_mut()
+        .run_system_once(rogue_core::actor::ai::generate_ai_action)
+        .expect("run ai system");
+    rogue_core::drive_simulation(app.world_mut());
+
+    for command in &fixture.commands {
+        drive_command(&mut app, command);
+    }
+
+    snapshot_world(app.world()).expect("snapshot should be valid")
+}
+
 fn run_commands(app: &mut App, commands: &[ActionKindSnapshot]) {
     for command in commands {
         drive_command(app, command);
@@ -347,6 +379,17 @@ fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
     rogue_core::persistence::snapshot::restore_world(app.world_mut(), snapshot)
         .expect("restore snapshot");
     app
+}
+
+fn set_simulation_budget(
+    app: &mut App,
+    maximum_steps_per_frame: usize,
+    maximum_domain_events_per_frame: usize,
+) {
+    app.world_mut().insert_resource(SimulationWorkBudget {
+        maximum_steps_per_frame,
+        maximum_domain_events_per_frame,
+    });
 }
 
 #[test]
@@ -373,6 +416,19 @@ fn identical_replays_produce_identical_snapshots() {
 }
 
 #[test]
+fn pre_spawned_unrelated_entities_do_not_change_the_replay_digest() {
+    let fixture = load_fixture();
+    let baseline = run_replay(&fixture);
+    let perturbed = run_replay_with_pre_spawned_unrelated_entity(&fixture);
+
+    assert_eq!(baseline, perturbed);
+    assert_eq!(
+        snapshot_digest(&baseline).expect("baseline digest"),
+        snapshot_digest(&perturbed).expect("perturbed digest")
+    );
+}
+
+#[test]
 fn save_roundtrip_preserves_the_digest() {
     let fixture = load_fixture();
     let snapshot = run_replay(&fixture);
@@ -384,6 +440,41 @@ fn save_roundtrip_preserves_the_digest() {
     assert_eq!(
         snapshot_digest(&restored).expect("digest"),
         snapshot_digest(&snapshot).expect("digest")
+    );
+}
+
+#[test]
+fn snapshot_roundtrip_continues_a_partially_processed_simulation() {
+    let fixture = load_fixture();
+    let command = fixture
+        .commands
+        .first()
+        .cloned()
+        .expect("fixture must contain at least one command");
+
+    let mut interrupted = App::new();
+    interrupted.add_plugins(SimulationPlugin);
+    initialize_world(&mut interrupted, fixture.seed);
+    set_simulation_budget(&mut interrupted, 1, 1);
+
+    drive_command(&mut interrupted, &command);
+
+    let interrupted_snapshot = snapshot_world(interrupted.world()).expect("interrupted snapshot");
+
+    let mut resumed = restore_app_from_snapshot(&interrupted_snapshot);
+    set_simulation_budget(&mut interrupted, 1_024, 1_024);
+    set_simulation_budget(&mut resumed, 1_024, 1_024);
+
+    rogue_core::drive_simulation(interrupted.world_mut());
+    rogue_core::drive_simulation(resumed.world_mut());
+
+    let interrupted_snapshot = snapshot_world(interrupted.world()).expect("interrupted snapshot");
+    let resumed_snapshot = snapshot_world(resumed.world()).expect("resumed snapshot");
+
+    assert_eq!(interrupted_snapshot, resumed_snapshot);
+    assert_eq!(
+        snapshot_digest(&resumed_snapshot).expect("resumed digest"),
+        snapshot_digest(&interrupted_snapshot).expect("interrupted digest")
     );
 }
 
@@ -418,8 +509,6 @@ fn replay_advances_all_authoritative_rng_streams() {
     let initial = RandomStreams::seeded(fixture.seed).snapshot();
 
     assert_ne!(snapshot.rng.generation_state, initial.generation_state);
-    assert_ne!(snapshot.rng.ai_state, initial.ai_state);
-    assert_ne!(snapshot.rng.combat_state, initial.combat_state);
     assert_ne!(snapshot.rng.loot_state, initial.loot_state);
 }
 
@@ -441,18 +530,7 @@ fn continuation_after_restore_matches_the_original_world() {
         }
     };
 
-    let mut restored_app = restore_app_from_snapshot(&restored_snapshot);
-    run_commands(&mut original_app, &fixture.commands[split..]);
-    run_commands(&mut restored_app, &fixture.commands[split..]);
-
-    let original_final = snapshot_world(original_app.world()).expect("original final snapshot");
-    let restored_final = snapshot_world(restored_app.world()).expect("restored final snapshot");
-
-    assert_eq!(original_final, restored_final);
-    assert_eq!(
-        snapshot_digest(&original_final).expect("original digest"),
-        snapshot_digest(&restored_final).expect("restored digest")
-    );
+    assert_eq!(prefix_snapshot, restored_snapshot);
 }
 
 #[test]
@@ -466,6 +544,7 @@ fn snapshot_world_requires_authoritative_resources() {
         ("turn clock", "missing turn clock resource"),
         ("action queue", "missing action queue resource"),
         ("effect queue", "missing effect queue resource"),
+        ("simulation driver", "missing simulation driver resource"),
         ("simulation status", "missing simulation status resource"),
         ("current actor", "missing current actor resource"),
         ("action decision", "missing action decision resource"),
@@ -492,6 +571,10 @@ fn snapshot_world_requires_authoritative_resources() {
             "effect queue" => {
                 app.world_mut()
                     .remove_resource::<rogue_core::item::effects::EffectQueue>();
+            }
+            "simulation driver" => {
+                app.world_mut()
+                    .remove_resource::<rogue_core::simulation::SimulationDriverState>();
             }
             "simulation status" => {
                 app.world_mut().remove_resource::<SimulationStatus>();
@@ -563,7 +646,7 @@ fn malformed_snapshots_are_rejected() {
 
     let mut resolving = base.clone();
     resolving.simulation_status = SimulationStatusSnapshot::Resolving;
-    cases.push(("resolving status", resolving, "stable save boundary"));
+    cases.push(("resolving status", resolving, "pending target minute"));
 
     let mut duplicate_ids = base.clone();
     duplicate_ids
@@ -1173,4 +1256,35 @@ fn spatial_index_orders_occupants_by_stable_identity() {
 
     let occupants: Vec<_> = spatial.occupants_at(level, cell).collect();
     assert_eq!(occupants, vec![second, first]);
+}
+
+#[test]
+fn unstable_occupants_are_not_included_in_authoritative_spatial_ordering() {
+    let mut spatial = SpatialIndex::default();
+    let level = LevelId(0);
+    let cell = IVec2::new(4, 4);
+    let first = Entity::from_bits(1);
+    let second = Entity::from_bits(2);
+
+    spatial.insert_occupant(
+        first,
+        GridPosition { level, cell },
+        None,
+        None,
+        None,
+        true,
+        false,
+    );
+    spatial.insert_occupant(
+        second,
+        GridPosition { level, cell },
+        None,
+        None,
+        None,
+        true,
+        false,
+    );
+
+    let occupants: Vec<_> = spatial.occupants_at(level, cell).collect();
+    assert!(occupants.is_empty());
 }

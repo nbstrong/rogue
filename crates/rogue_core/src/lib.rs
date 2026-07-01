@@ -16,7 +16,8 @@ pub use sim_core::{
     StableIdTag,
 };
 pub use simulation::{
-    SimulationPlugin, SimulationSet, SimulationStatus, SimulationStep, drive_simulation,
+    SimulationDriverState, SimulationPlugin, SimulationSet, SimulationStatus, SimulationStep,
+    drive_simulation,
 };
 pub use time::clock::{ScheduledActor, TurnClock};
 pub use world::map::{GridPosition, LevelId};

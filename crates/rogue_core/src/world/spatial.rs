@@ -59,11 +59,12 @@ impl SpatialIndex {
         blocks_movement: bool,
         blocks_sight: bool,
     ) {
+        let order = Self::occupant_order(entity, stable_actor, stable_item, persistent_id);
+        if matches!(order, SpatialOccupantOrder::Unstable) {
+            return;
+        }
         let key = (position.level, position.cell);
-        let occupant = SpatialOccupant {
-            order: Self::occupant_order(entity, stable_actor, stable_item, persistent_id),
-            entity,
-        };
+        let occupant = SpatialOccupant { order, entity };
         let occupants = self.occupants.entry(key).or_default();
         occupants.push(occupant);
         occupants.sort_by_key(|entry| entry.order);
