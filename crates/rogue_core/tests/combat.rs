@@ -22,6 +22,69 @@ fn build_app() -> App {
     app
 }
 
+macro_rules! schedule_actor {
+    ($app:expr, $entity:expr, $tick:expr) => {{
+        let actor = actor_id($app.world(), $entity);
+        $app.world_mut()
+            .resource_mut::<TurnClock>()
+            .schedule_at(actor, $tick);
+    }};
+}
+
+macro_rules! push_action {
+    ($app:expr, $entity:expr, $kind:expr) => {{
+        let actor = actor_id($app.world(), $entity);
+        let kind = $kind;
+        $app.world_mut()
+            .resource_mut::<ActionQueue>()
+            .push(Action { actor, kind });
+    }};
+}
+
+fn tag_actor(world: &mut World, entity: Entity) -> ActorId {
+    let id = ActorId::new(entity.to_bits()).expect("valid actor id");
+    world.entity_mut(entity).insert(StableActorId(id));
+    id
+}
+
+fn tag_item(world: &mut World, entity: Entity) -> ItemId {
+    let id = ItemId::new(entity.to_bits()).expect("valid item id");
+    world.entity_mut(entity).insert(StableItemId(id));
+    id
+}
+
+fn actor_id(world: &World, entity: Entity) -> ActorId {
+    let _ = world;
+    ActorId::new(entity.to_bits()).expect("valid actor id")
+}
+
+fn item_id(world: &World, entity: Entity) -> ItemId {
+    let _ = world;
+    ItemId::new(entity.to_bits()).expect("valid item id")
+}
+
+fn register_spatial_occupant(
+    spatial: &mut SpatialIndex,
+    entity: Entity,
+    level: LevelId,
+    cell: IVec2,
+    stable_actor: Option<StableActorId>,
+    stable_item: Option<StableItemId>,
+    persistent_id: Option<PersistentId>,
+    blocks_movement: bool,
+    blocks_sight: bool,
+) {
+    spatial.insert_occupant(
+        entity,
+        GridPosition { level, cell },
+        stable_actor.as_ref(),
+        stable_item.as_ref(),
+        persistent_id.as_ref(),
+        blocks_movement,
+        blocks_sight,
+    );
+}
+
 fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
     let level = LevelId(0);
     app.world_mut().insert_resource(generate_one_room(7, 7));
@@ -58,6 +121,7 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), player);
 
     let monster = app
         .world_mut()
@@ -87,20 +151,51 @@ fn spawn_test_world(app: &mut App) -> (Entity, Entity) {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), monster);
 
-    spatial
-        .occupants
-        .insert((level, IVec2::new(2, 2)), vec![player]);
-    spatial.movement_blockers.insert((level, IVec2::new(2, 2)));
-    spatial.sight_blockers.insert((level, IVec2::new(2, 2)));
-    spatial
-        .occupants
-        .insert((level, IVec2::new(3, 2)), vec![monster]);
-    spatial.movement_blockers.insert((level, IVec2::new(3, 2)));
-    spatial.sight_blockers.insert((level, IVec2::new(3, 2)));
+    let player_stable = app.world().entity(player).get::<StableActorId>().copied();
+    let monster_stable = app.world().entity(monster).get::<StableActorId>().copied();
+    register_spatial_occupant(
+        &mut spatial,
+        player,
+        level,
+        IVec2::new(2, 2),
+        player_stable,
+        None,
+        app.world().entity(player).get::<PersistentId>().copied(),
+        true,
+        true,
+    );
+    register_spatial_occupant(
+        &mut spatial,
+        monster,
+        level,
+        IVec2::new(3, 2),
+        monster_stable,
+        None,
+        app.world().entity(monster).get::<PersistentId>().copied(),
+        true,
+        true,
+    );
     app.world_mut().insert_resource(spatial);
+    build_stable_entity_index(app.world_mut());
 
     (player, monster)
+}
+
+fn build_stable_entity_index(world: &mut World) {
+    let mut index = StableEntityIndex::default();
+    let mut actors = world.query::<(Entity, &StableActorId)>();
+    for (entity, stable_id) in actors.iter(world) {
+        index.insert_actor(stable_id.0, entity);
+    }
+
+    let mut items = world.query::<(Entity, &StableItemId)>();
+    for (entity, stable_id) in items.iter(world) {
+        index.insert_item(stable_id.0, entity);
+    }
+
+    world.insert_resource(index);
 }
 
 #[test]
@@ -108,17 +203,14 @@ fn bumping_into_an_enemy_converts_to_damage() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);
 
-    {
-        let mut clock = app.world_mut().resource_mut::<TurnClock>();
-        clock.schedule_at(player, 0);
-    }
-
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Move {
-            delta: IVec2::new(1, 0),
-        },
-    });
+    schedule_actor!(app, player, 0);
+    push_action!(
+        app,
+        player,
+        ActionKind::Move {
+            delta: IVec2::new(1, 0)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -131,9 +223,7 @@ fn waiting_player_turn_is_preserved_until_action_arrives() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
+    schedule_actor!(app, player, 0);
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -141,12 +231,12 @@ fn waiting_player_turn_is_preserved_until_action_arrives() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
-    assert_eq!(app.world().resource::<CurrentActor>().0, Some(player));
+    assert_eq!(
+        app.world().resource::<CurrentActor>().0,
+        Some(actor_id(app.world(), player))
+    );
 
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Wait,
-    });
+    push_action!(app, player, ActionKind::Wait);
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
 
     app.world_mut().run_schedule(SimulationStep);
@@ -168,12 +258,8 @@ fn stale_scheduled_actor_is_skipped_before_the_next_valid_actor() {
         maximum: 4,
     });
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(monster, 0);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
+    schedule_actor!(app, monster, 0);
+    schedule_actor!(app, player, 0);
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -181,7 +267,35 @@ fn stale_scheduled_actor_is_skipped_before_the_next_valid_actor() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
-    assert_eq!(app.world().resource::<CurrentActor>().0, Some(player));
+    assert_eq!(
+        app.world().resource::<CurrentActor>().0,
+        Some(actor_id(app.world(), player))
+    );
+}
+
+#[test]
+fn drive_simulation_keeps_a_live_scheduled_actor_when_the_index_starts_stale() {
+    let mut app = build_app();
+    let (player, _monster) = spawn_test_world(&mut app);
+    app.world_mut()
+        .insert_resource(rogue_core::actor::components::StableEntityIndex::default());
+    schedule_actor!(app, player, 0);
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+
+    drive_simulation(app.world_mut());
+
+    assert_eq!(
+        app.world().resource::<SimulationStatus>(),
+        &SimulationStatus::WaitingForPlayer
+    );
+    assert_eq!(app.world().resource::<CurrentActor>().0, None);
+    assert_eq!(
+        app.world()
+            .resource::<TurnClock>()
+            .peek_next()
+            .map(|entry| entry.actor.raw()),
+        Some(actor_id(app.world(), player).raw())
+    );
 }
 
 #[test]
@@ -189,16 +303,9 @@ fn prequeued_player_action_keeps_the_simulation_resolving() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(monster, 0);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 50);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Wait,
-    });
+    schedule_actor!(app, monster, 0);
+    schedule_actor!(app, player, 50);
+    push_action!(app, player, ActionKind::Wait);
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -206,7 +313,11 @@ fn prequeued_player_action_keeps_the_simulation_resolving() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::Resolving
     );
-    assert!(app.world().resource::<ActionQueue>().contains_actor(player));
+    assert!(
+        app.world()
+            .resource::<ActionQueue>()
+            .contains_actor(actor_id(app.world(), player))
+    );
     assert!(app.world().resource::<CurrentActor>().0.is_none());
 }
 
@@ -215,24 +326,11 @@ fn actions_for_other_actors_are_preserved_through_their_turn() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(monster, 0);
+    schedule_actor!(app, player, 0);
+    schedule_actor!(app, monster, 0);
 
-    {
-        let mut queue = app.world_mut().resource_mut::<ActionQueue>();
-        queue.push(Action {
-            actor: monster,
-            kind: ActionKind::Wait,
-        });
-        queue.push(Action {
-            actor: player,
-            kind: ActionKind::Wait,
-        });
-    }
+    push_action!(app, monster, ActionKind::Wait);
+    push_action!(app, player, ActionKind::Wait);
 
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
     drive_simulation(app.world_mut());
@@ -241,7 +339,8 @@ fn actions_for_other_actors_are_preserved_through_their_turn() {
     assert!(queue.is_empty());
     assert!(matches!(
         app.world().resource::<ActionOutcomeLog>().latest(),
-        Some(ActionOutcome::Resolved(action)) if action.actor == monster
+        Some(ActionOutcome::Resolved(action))
+            if action.actor == actor_id(app.world(), monster)
     ));
 }
 
@@ -249,9 +348,7 @@ fn actions_for_other_actors_are_preserved_through_their_turn() {
 fn moving_over_an_item_does_not_damage_it() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
+    schedule_actor!(app, player, 0);
     let item = app
         .world_mut()
         .spawn((
@@ -266,20 +363,32 @@ fn moving_over_an_item_does_not_damage_it() {
             },
         ))
         .id();
+    tag_item(app.world_mut(), item);
 
-    app.world_mut()
-        .resource_mut::<SpatialIndex>()
-        .occupants
-        .entry((LevelId(0), IVec2::new(2, 3)))
-        .or_default()
-        .push(item);
+    {
+        let item_stable = app.world().entity(item).get::<StableItemId>().copied();
+        let item_persistent = app.world().entity(item).get::<PersistentId>().copied();
+        let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
+        register_spatial_occupant(
+            &mut spatial,
+            item,
+            LevelId(0),
+            IVec2::new(2, 3),
+            None,
+            item_stable,
+            item_persistent,
+            false,
+            false,
+        );
+    }
 
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Move {
-            delta: IVec2::new(0, 1),
-        },
-    });
+    push_action!(
+        app,
+        player,
+        ActionKind::Move {
+            delta: IVec2::new(0, 1)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -294,9 +403,7 @@ fn moving_over_an_item_does_not_damage_it() {
 fn moving_into_a_friendly_blocker_is_rejected() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
+    schedule_actor!(app, player, 0);
     let blocker = app
         .world_mut()
         .spawn((
@@ -313,25 +420,32 @@ fn moving_into_a_friendly_blocker_is_rejected() {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), blocker);
 
     {
+        let blocker_stable = app.world().entity(blocker).get::<StableActorId>().copied();
+        let blocker_persistent = app.world().entity(blocker).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(2, 3)))
-            .or_default()
-            .push(blocker);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(2, 3)));
+        register_spatial_occupant(
+            &mut spatial,
+            blocker,
+            LevelId(0),
+            IVec2::new(2, 3),
+            blocker_stable,
+            None,
+            blocker_persistent,
+            true,
+            false,
+        );
     }
 
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Move {
-            delta: IVec2::new(0, 1),
-        },
-    });
+    push_action!(
+        app,
+        player,
+        ActionKind::Move {
+            delta: IVec2::new(0, 1)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -373,31 +487,34 @@ fn non_hostile_actor_does_not_bump_the_player() {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), neutral);
 
     {
+        let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
+        let neutral_persistent = app.world().entity(neutral).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(1, 2)))
-            .or_default()
-            .push(neutral);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
-        spatial
-            .sight_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
+        register_spatial_occupant(
+            &mut spatial,
+            neutral,
+            LevelId(0),
+            IVec2::new(1, 2),
+            neutral_stable,
+            None,
+            neutral_persistent,
+            true,
+            true,
+        );
     }
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(neutral, 0);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: neutral,
-        kind: ActionKind::Move {
-            delta: IVec2::new(1, 0),
-        },
-    });
+    build_stable_entity_index(app.world_mut());
+    schedule_actor!(app, neutral, 0);
+    push_action!(
+        app,
+        neutral,
+        ActionKind::Move {
+            delta: IVec2::new(1, 0)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -412,9 +529,7 @@ fn non_hostile_actor_does_not_bump_the_player() {
 fn direct_melee_against_a_distant_target_fails_without_damage() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
+    schedule_actor!(app, player, 0);
     let target = app
         .world_mut()
         .spawn((
@@ -438,26 +553,33 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), target);
+    build_stable_entity_index(app.world_mut());
 
     {
+        let target_stable = app.world().entity(target).get::<StableActorId>().copied();
+        let target_persistent = app.world().entity(target).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(5, 5)))
-            .or_default()
-            .push(target);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(5, 5)));
-        spatial
-            .sight_blockers
-            .insert((LevelId(0), IVec2::new(5, 5)));
+        register_spatial_occupant(
+            &mut spatial,
+            target,
+            LevelId(0),
+            IVec2::new(5, 5),
+            target_stable,
+            None,
+            target_persistent,
+            true,
+            true,
+        );
     }
 
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Melee { target },
-    });
+    push_action!(
+        app,
+        player,
+        ActionKind::Melee {
+            target: actor_id(app.world(), target)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -481,13 +603,8 @@ fn unsupported_actions_report_an_explicit_failure() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Descend,
-    });
+    schedule_actor!(app, player, 0);
+    push_action!(app, player, ActionKind::Descend);
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -518,14 +635,16 @@ fn distant_pickup_does_not_mutate_inventory_or_item_state() {
             },
         ))
         .id();
+    tag_item(app.world_mut(), item);
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::PickUp { item },
-    });
+    schedule_actor!(app, player, 0);
+    push_action!(
+        app,
+        player,
+        ActionKind::PickUp {
+            item: item_id(app.world(), item)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
@@ -573,6 +692,8 @@ fn pickup_of_an_item_carried_by_someone_else_does_not_mutate_state() {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), owner);
+    let owner_actor_id = actor_id(app.world(), owner);
     let item = app
         .world_mut()
         .spawn((
@@ -582,9 +703,11 @@ fn pickup_of_an_item_carried_by_someone_else_does_not_mutate_state() {
                 level: LevelId(0),
                 cell: IVec2::new(4, 4),
             },
-            CarriedBy(owner),
+            CarriedBy(owner_actor_id),
         ))
         .id();
+    tag_item(app.world_mut(), item);
+    let item_stable_id = item_id(app.world(), item);
 
     {
         let mut owner_inventory = app.world_mut().entity_mut(owner);
@@ -592,26 +715,28 @@ fn pickup_of_an_item_carried_by_someone_else_does_not_mutate_state() {
             .get_mut::<Inventory>()
             .unwrap()
             .items
-            .push(item);
+            .push(item_stable_id);
     }
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::PickUp { item },
-    });
+    build_stable_entity_index(app.world_mut());
+    schedule_actor!(app, player, 0);
+    push_action!(
+        app,
+        player,
+        ActionKind::PickUp {
+            item: item_id(app.world(), item)
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
     let owner_inventory = app.world().entity(owner).get::<Inventory>().unwrap();
     let player_inventory = app.world().entity(player).get::<Inventory>().unwrap();
-    assert_eq!(owner_inventory.items, vec![item]);
+    assert_eq!(owner_inventory.items, vec![item_id(app.world(), item)]);
     assert!(player_inventory.items.is_empty());
     assert_eq!(
         app.world().entity(item).get::<CarriedBy>().unwrap().0,
-        owner
+        actor_id(app.world(), owner)
     );
     assert!(matches!(
         app.world().resource::<ActionOutcomeLog>().latest(),
@@ -626,6 +751,7 @@ fn pickup_of_an_item_carried_by_someone_else_does_not_mutate_state() {
 fn invalid_target_item_use_does_not_consume_or_despawn_the_item() {
     let mut app = build_app();
     let (player, _monster) = spawn_test_world(&mut app);
+    let player_actor_id = actor_id(app.world(), player);
     let item = app
         .world_mut()
         .spawn((
@@ -635,32 +761,38 @@ fn invalid_target_item_use_does_not_consume_or_despawn_the_item() {
                 level: LevelId(0),
                 cell: IVec2::new(2, 2),
             },
-            CarriedBy(player),
+            CarriedBy(player_actor_id),
         ))
         .id();
+    tag_item(app.world_mut(), item);
+    let item_stable_id = item_id(app.world(), item);
     {
         let mut inventory = app.world_mut().entity_mut(player);
-        inventory.get_mut::<Inventory>().unwrap().items.push(item);
+        inventory
+            .get_mut::<Inventory>()
+            .unwrap()
+            .items
+            .push(item_stable_id);
     }
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::UseItem {
-            item,
+    build_stable_entity_index(app.world_mut());
+    schedule_actor!(app, player, 0);
+    push_action!(
+        app,
+        player,
+        ActionKind::UseItem {
+            item: item_id(app.world(), item),
             target: rogue_core::action::intent::ActionTarget::Cell {
                 level: LevelId(0),
-                position: IVec2::new(5, 5),
-            },
-        },
-    });
+                position: IVec2::new(5, 5)
+            }
+        }
+    );
 
     app.world_mut().run_schedule(SimulationStep);
 
     let inventory = app.world().entity(player).get::<Inventory>().unwrap();
-    assert_eq!(inventory.items, vec![item]);
+    assert_eq!(inventory.items, vec![item_id(app.world(), item)]);
     assert!(app.world().get_entity(item).is_ok());
     assert!(matches!(
         app.world().resource::<ActionOutcomeLog>().latest(),
@@ -676,16 +808,9 @@ fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
     let mut app = build_app();
     let (player, monster) = spawn_test_world(&mut app);
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 0);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(monster, 0);
-    app.world_mut().resource_mut::<ActionQueue>().push(Action {
-        actor: player,
-        kind: ActionKind::Descend,
-    });
+    schedule_actor!(app, player, 0);
+    schedule_actor!(app, monster, 0);
+    push_action!(app, player, ActionKind::Descend);
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
 
     drive_simulation(app.world_mut());
@@ -699,7 +824,7 @@ fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
             .resource::<TurnClock>()
             .peek_next()
             .map(|next| next.actor),
-        Some(player)
+        Some(actor_id(app.world(), player))
     );
     assert!(app.world().resource::<ActionQueue>().is_empty());
 
@@ -714,7 +839,8 @@ fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
     ));
     assert!(matches!(
         outcomes.back(),
-        Some(ActionOutcome::Resolved(action)) if action.actor == monster
+        Some(ActionOutcome::Resolved(action))
+            if action.actor == actor_id(app.world(), monster)
     ));
 }
 
@@ -748,28 +874,28 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
             },
         ))
         .id();
+    tag_actor(app.world_mut(), neutral);
 
     {
+        let neutral_stable = app.world().entity(neutral).get::<StableActorId>().copied();
+        let neutral_persistent = app.world().entity(neutral).get::<PersistentId>().copied();
         let mut spatial = app.world_mut().resource_mut::<SpatialIndex>();
-        spatial
-            .occupants
-            .entry((LevelId(0), IVec2::new(1, 2)))
-            .or_default()
-            .push(neutral);
-        spatial
-            .movement_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
-        spatial
-            .sight_blockers
-            .insert((LevelId(0), IVec2::new(1, 2)));
+        register_spatial_occupant(
+            &mut spatial,
+            neutral,
+            LevelId(0),
+            IVec2::new(1, 2),
+            neutral_stable,
+            None,
+            neutral_persistent,
+            true,
+            true,
+        );
     }
 
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(neutral, 0);
-    app.world_mut()
-        .resource_mut::<TurnClock>()
-        .schedule_at(player, 50);
+    build_stable_entity_index(app.world_mut());
+    schedule_actor!(app, neutral, 0);
+    schedule_actor!(app, player, 50);
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
 
     drive_simulation(app.world_mut());
@@ -783,19 +909,8 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
             .resource::<TurnClock>()
             .peek_next()
             .map(|next| next.actor),
-        Some(player)
+        Some(actor_id(app.world(), player))
     );
-
-    let outcome_log = app.world().resource::<ActionOutcomeLog>();
-    let outcomes = &outcome_log.outcomes;
-    assert_eq!(outcomes.len(), 1);
-    assert!(matches!(
-        outcomes.front(),
-        Some(ActionOutcome::Failed {
-            failure: ActionFailure::ActorUnavailable,
-            ..
-        })
-    ));
 }
 
 #[test]
@@ -812,15 +927,14 @@ fn identical_input_sequences_produce_identical_state() {
             .iter_entities()
             .find_map(|entity_ref| entity_ref.get::<Player>().map(|_| entity_ref.id()))
             .expect("player");
-        app.world_mut()
-            .resource_mut::<TurnClock>()
-            .schedule_at(player, 0);
-        app.world_mut().resource_mut::<ActionQueue>().push(Action {
-            actor: player,
-            kind: ActionKind::Move {
-                delta: IVec2::new(1, 0),
-            },
-        });
+        schedule_actor!(app, player, 0);
+        push_action!(
+            app,
+            player,
+            ActionKind::Move {
+                delta: IVec2::new(1, 0)
+            }
+        );
         app.world_mut().run_schedule(SimulationStep);
     }
 

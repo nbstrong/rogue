@@ -5,6 +5,7 @@ use crate::actor::components::*;
 use crate::content::definitions::ActorDefinition;
 use crate::item::components::Inventory;
 use crate::world::map::{GridPosition, LevelId};
+use sim_core::ActorId;
 
 pub fn spawn_player(
     commands: &mut Commands<'_, '_>,
@@ -12,7 +13,10 @@ pub fn spawn_player(
     level: LevelId,
     cell: IVec2,
 ) -> Entity {
-    let persistent_id = allocator.allocate();
+    let persistent_id = allocator
+        .allocate()
+        .expect("persistent id allocator exhausted");
+    let stable_actor_id = ActorId::new(persistent_id.0).expect("valid actor id");
     commands
         .spawn((
             Actor,
@@ -36,6 +40,7 @@ pub fn spawn_player(
             PrototypeId("player".to_string()),
             GridPosition { level, cell },
             persistent_id,
+            StableActorId(stable_actor_id),
         ))
         .id()
 }
@@ -47,7 +52,10 @@ pub fn spawn_monster(
     level: LevelId,
     cell: IVec2,
 ) -> Entity {
-    let persistent_id = allocator.allocate();
+    let persistent_id = allocator
+        .allocate()
+        .expect("persistent id allocator exhausted");
+    let stable_actor_id = ActorId::new(persistent_id.0).expect("valid actor id");
     commands
         .spawn((
             Actor,
@@ -73,6 +81,7 @@ pub fn spawn_monster(
             PrototypeId(definition.id.clone()),
             GridPosition { level, cell },
             persistent_id,
+            StableActorId(stable_actor_id),
         ))
         .id()
 }

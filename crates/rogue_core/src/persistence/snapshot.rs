@@ -9,28 +9,21 @@ use crate::action::queue::ActionQueue;
 use crate::actor::combat::{DamageKind, StatusEffect};
 use crate::actor::components::{
     ActionSpeed, ActiveStatuses, Actor, AiGoal, BlocksMovement, BlocksSight, CombatStats, Health,
-    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId, Vision,
+    HostileToPlayer, Monster, PersistentId, PersistentIdAllocator, Player, PrototypeId,
+    StableActorId, StableEntityIndex, StableItemId, Vision,
 };
 use crate::item::components::{CarriedBy, Inventory, Item};
 use crate::item::effects::{Effect, EffectQueue};
-use crate::simulation::SimulationStatus;
+use crate::simulation::{SimulationDriverState, SimulationStatus};
 use crate::time::clock::{CurrentActor, ScheduledActor, TurnClock};
 use crate::world::fov::recalculate_fov_for_player;
 use crate::world::map::{GridPosition, LevelId, LevelMap};
 use crate::world::spatial::SpatialIndex;
 use crate::world::tile::{Tile, TileKind};
+use sim_core::Cadence;
 
-use super::migration::{LegacyGameSnapshotV1, SnapshotFile};
-use super::rng::RandomStreams;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RandomSnapshot {
-    pub seed: u64,
-    pub generation_state: u64,
-    pub combat_state: u64,
-    pub loot_state: u64,
-    pub ai_state: u64,
-}
+use super::migration::{LegacyGameSnapshotV1, LegacyGameSnapshotV2, SnapshotFile};
+use super::rng::{RandomSnapshot, RandomStreams};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SavedPosition {
@@ -236,6 +229,7 @@ pub struct GameSnapshot {
     pub timeline: Vec<ScheduledActorSnapshot>,
     pub pending_actions: Vec<ActionSnapshot>,
     pub pending_effects: Vec<EffectSnapshot>,
+    pub simulation_driver: SimulationDriverState,
     pub rng: RandomSnapshot,
 }
 
@@ -262,13 +256,10 @@ fn pid_of(entity: Entity, ids: &HashMap<Entity, u64>) -> SnapshotResult<u64> {
         .ok_or_else(|| format!("missing persistent id for entity {:?}", entity))
 }
 
-fn action_target_to_snapshot(
-    target: &ActionTarget,
-    ids: &HashMap<Entity, u64>,
-) -> SnapshotResult<ActionTargetSnapshot> {
+fn action_target_to_snapshot(target: &ActionTarget) -> SnapshotResult<ActionTargetSnapshot> {
     match target {
         ActionTarget::SelfTarget => Ok(ActionTargetSnapshot::SelfTarget),
-        ActionTarget::Entity(entity) => Ok(ActionTargetSnapshot::Entity(pid_of(*entity, ids)?)),
+        ActionTarget::Actor(entity) => Ok(ActionTargetSnapshot::Entity(entity.raw())),
         ActionTarget::Cell { level, position } => Ok(ActionTargetSnapshot::Cell {
             level: level.0,
             x: position.x,
@@ -277,17 +268,12 @@ fn action_target_to_snapshot(
     }
 }
 
-fn action_target_from_snapshot(
-    target: &ActionTargetSnapshot,
-    entities: &HashMap<u64, Entity>,
-) -> SnapshotResult<ActionTarget> {
+fn action_target_from_snapshot(target: &ActionTargetSnapshot) -> SnapshotResult<ActionTarget> {
     match target {
         ActionTargetSnapshot::SelfTarget => Ok(ActionTarget::SelfTarget),
-        ActionTargetSnapshot::Entity(id) => {
-            Ok(ActionTarget::Entity(*entities.get(id).ok_or_else(
-                || format!("missing entity for persistent id {}", id),
-            )?))
-        }
+        ActionTargetSnapshot::Entity(id) => Ok(ActionTarget::Actor(
+            sim_core::ActorId::new(*id).ok_or_else(|| format!("invalid actor id {}", id))?,
+        )),
         ActionTargetSnapshot::Cell { level, x, y } => Ok(ActionTarget::Cell {
             level: LevelId(*level),
             position: IVec2::new(*x, *y),
@@ -295,10 +281,7 @@ fn action_target_from_snapshot(
     }
 }
 
-fn action_kind_to_snapshot(
-    kind: &ActionKind,
-    ids: &HashMap<Entity, u64>,
-) -> SnapshotResult<ActionKindSnapshot> {
+fn action_kind_to_snapshot(kind: &ActionKind) -> SnapshotResult<ActionKindSnapshot> {
     Ok(match kind {
         ActionKind::Wait => ActionKindSnapshot::Wait,
         ActionKind::Move { delta } => ActionKindSnapshot::Move {
@@ -306,96 +289,72 @@ fn action_kind_to_snapshot(
             dy: delta.y,
         },
         ActionKind::Melee { target } => ActionKindSnapshot::Melee {
-            target: pid_of(*target, ids)?,
+            target: target.raw(),
         },
-        ActionKind::PickUp { item } => ActionKindSnapshot::PickUp {
-            item: pid_of(*item, ids)?,
-        },
-        ActionKind::Drop { item } => ActionKindSnapshot::Drop {
-            item: pid_of(*item, ids)?,
-        },
+        ActionKind::PickUp { item } => ActionKindSnapshot::PickUp { item: item.raw() },
+        ActionKind::Drop { item } => ActionKindSnapshot::Drop { item: item.raw() },
         ActionKind::UseItem { item, target } => ActionKindSnapshot::UseItem {
-            item: pid_of(*item, ids)?,
-            target: action_target_to_snapshot(target, ids)?,
+            item: item.raw(),
+            target: action_target_to_snapshot(target)?,
         },
         ActionKind::Descend => ActionKindSnapshot::Descend,
         ActionKind::Ascend => ActionKindSnapshot::Ascend,
     })
 }
 
-fn action_kind_from_snapshot(
-    kind: &ActionKindSnapshot,
-    entities: &HashMap<u64, Entity>,
-) -> SnapshotResult<ActionKind> {
+fn action_kind_from_snapshot(kind: &ActionKindSnapshot) -> SnapshotResult<ActionKind> {
     Ok(match kind {
         ActionKindSnapshot::Wait => ActionKind::Wait,
         ActionKindSnapshot::Move { dx, dy } => ActionKind::Move {
             delta: IVec2::new(*dx, *dy),
         },
         ActionKindSnapshot::Melee { target } => ActionKind::Melee {
-            target: *entities
-                .get(target)
-                .ok_or_else(|| format!("missing entity for persistent id {}", target))?,
+            target: sim_core::ActorId::new(*target)
+                .ok_or_else(|| format!("invalid actor id {}", target))?,
         },
         ActionKindSnapshot::PickUp { item } => ActionKind::PickUp {
-            item: *entities
-                .get(item)
-                .ok_or_else(|| format!("missing entity for persistent id {}", item))?,
+            item: sim_core::ItemId::new(*item)
+                .ok_or_else(|| format!("invalid item id {}", item))?,
         },
         ActionKindSnapshot::Drop { item } => ActionKind::Drop {
-            item: *entities
-                .get(item)
-                .ok_or_else(|| format!("missing entity for persistent id {}", item))?,
+            item: sim_core::ItemId::new(*item)
+                .ok_or_else(|| format!("invalid item id {}", item))?,
         },
         ActionKindSnapshot::UseItem { item, target } => ActionKind::UseItem {
-            item: *entities
-                .get(item)
-                .ok_or_else(|| format!("missing entity for persistent id {}", item))?,
-            target: action_target_from_snapshot(target, entities)?,
+            item: sim_core::ItemId::new(*item)
+                .ok_or_else(|| format!("invalid item id {}", item))?,
+            target: action_target_from_snapshot(target)?,
         },
         ActionKindSnapshot::Descend => ActionKind::Descend,
         ActionKindSnapshot::Ascend => ActionKind::Ascend,
     })
 }
 
-fn ai_goal_to_snapshot(
-    goal: &AiGoal,
-    ids: &HashMap<Entity, u64>,
-) -> SnapshotResult<AiGoalSnapshot> {
+fn ai_goal_to_snapshot(goal: &AiGoal) -> SnapshotResult<AiGoalSnapshot> {
     Ok(match goal {
         AiGoal::Idle => AiGoalSnapshot::Idle,
         AiGoal::Wander => AiGoalSnapshot::Wander,
         AiGoal::Investigate(position) => AiGoalSnapshot::Investigate(position_to_saved(*position)),
-        AiGoal::Chase(entity) => AiGoalSnapshot::Chase(pid_of(*entity, ids)?),
-        AiGoal::Flee(entity) => AiGoalSnapshot::Flee(pid_of(*entity, ids)?),
+        AiGoal::Chase(entity) => AiGoalSnapshot::Chase(entity.raw()),
+        AiGoal::Flee(entity) => AiGoalSnapshot::Flee(entity.raw()),
     })
 }
 
-fn ai_goal_from_snapshot(
-    goal: &AiGoalSnapshot,
-    entities: &HashMap<u64, Entity>,
-) -> SnapshotResult<AiGoal> {
+fn ai_goal_from_snapshot(goal: &AiGoalSnapshot) -> SnapshotResult<AiGoal> {
     Ok(match goal {
         AiGoalSnapshot::Idle => AiGoal::Idle,
         AiGoalSnapshot::Wander => AiGoal::Wander,
         AiGoalSnapshot::Investigate(position) => AiGoal::Investigate(saved_to_position(position)),
         AiGoalSnapshot::Chase(id) => AiGoal::Chase(
-            *entities
-                .get(id)
-                .ok_or_else(|| format!("missing entity for persistent id {}", id))?,
+            sim_core::ActorId::new(*id).ok_or_else(|| format!("invalid actor id {}", id))?,
         ),
         AiGoalSnapshot::Flee(id) => AiGoal::Flee(
-            *entities
-                .get(id)
-                .ok_or_else(|| format!("missing entity for persistent id {}", id))?,
+            sim_core::ActorId::new(*id).ok_or_else(|| format!("invalid actor id {}", id))?,
         ),
     })
 }
 
-fn effect_to_snapshot(
-    effect: &Effect,
-    ids: &HashMap<Entity, u64>,
-) -> SnapshotResult<EffectSnapshot> {
+fn effect_to_snapshot(effect: &Effect) -> SnapshotResult<EffectSnapshot> {
     Ok(match effect {
         Effect::Damage {
             source,
@@ -403,36 +362,30 @@ fn effect_to_snapshot(
             amount,
             kind,
         } => EffectSnapshot::Damage {
-            source: match source {
-                Some(entity) => Some(pid_of(*entity, ids)?),
-                None => None,
-            },
-            target: pid_of(*target, ids)?,
+            source: source.map(|actor| actor.raw()),
+            target: target.raw(),
             amount: *amount,
             kind: *kind,
         },
         Effect::Heal { target, amount } => EffectSnapshot::Heal {
-            target: pid_of(*target, ids)?,
+            target: target.raw(),
             amount: *amount,
         },
         Effect::Teleport {
             target,
             destination,
         } => EffectSnapshot::Teleport {
-            target: pid_of(*target, ids)?,
+            target: target.raw(),
             destination: position_to_saved(*destination),
         },
         Effect::ApplyStatus { target, status } => EffectSnapshot::ApplyStatus {
-            target: pid_of(*target, ids)?,
+            target: target.raw(),
             status: *status,
         },
     })
 }
 
-fn effect_from_snapshot(
-    effect: &EffectSnapshot,
-    entities: &HashMap<u64, Entity>,
-) -> SnapshotResult<Effect> {
+fn effect_from_snapshot(effect: &EffectSnapshot) -> SnapshotResult<Effect> {
     Ok(match effect {
         EffectSnapshot::Damage {
             source,
@@ -442,37 +395,32 @@ fn effect_from_snapshot(
         } => Effect::Damage {
             source: match source {
                 Some(id) => Some(
-                    *entities
-                        .get(id)
-                        .ok_or_else(|| format!("missing entity for persistent id {}", id))?,
+                    sim_core::ActorId::new(*id)
+                        .ok_or_else(|| format!("invalid actor id {}", id))?,
                 ),
                 None => None,
             },
-            target: *entities
-                .get(target)
-                .ok_or_else(|| format!("missing entity for persistent id {}", target))?,
+            target: sim_core::ActorId::new(*target)
+                .ok_or_else(|| format!("invalid actor id {}", target))?,
             amount: *amount,
             kind: *kind,
         },
         EffectSnapshot::Heal { target, amount } => Effect::Heal {
-            target: *entities
-                .get(target)
-                .ok_or_else(|| format!("missing entity for persistent id {}", target))?,
+            target: sim_core::ActorId::new(*target)
+                .ok_or_else(|| format!("invalid actor id {}", target))?,
             amount: *amount,
         },
         EffectSnapshot::Teleport {
             target,
             destination,
         } => Effect::Teleport {
-            target: *entities
-                .get(target)
-                .ok_or_else(|| format!("missing entity for persistent id {}", target))?,
+            target: sim_core::ActorId::new(*target)
+                .ok_or_else(|| format!("invalid actor id {}", target))?,
             destination: saved_to_position(destination),
         },
         EffectSnapshot::ApplyStatus { target, status } => Effect::ApplyStatus {
-            target: *entities
-                .get(target)
-                .ok_or_else(|| format!("missing entity for persistent id {}", target))?,
+            target: sim_core::ActorId::new(*target)
+                .ok_or_else(|| format!("invalid actor id {}", target))?,
             status: *status,
         },
     })
@@ -542,7 +490,7 @@ fn build_entity_snapshot(
         .map(|inventory| {
             let mut items = Vec::with_capacity(inventory.items.len());
             for item in &inventory.items {
-                items.push(pid_of(*item, ids)?);
+                items.push(item.raw());
             }
             Ok::<SavedInventory, String>(SavedInventory {
                 capacity: inventory.capacity,
@@ -552,11 +500,11 @@ fn build_entity_snapshot(
         .transpose()?;
     let carried_by = entity_ref
         .get::<CarriedBy>()
-        .map(|carried| pid_of(carried.0, ids))
+        .map(|carried| Ok::<u64, String>(carried.0.raw()))
         .transpose()?;
     let ai_goal = entity_ref
         .get::<AiGoal>()
-        .map(|goal| ai_goal_to_snapshot(goal, ids))
+        .map(|goal| ai_goal_to_snapshot(goal))
         .transpose()?;
     let last_known_player_position = entity_ref
         .get::<crate::actor::components::LastKnownPlayerPosition>()
@@ -610,7 +558,18 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         }
     }
 
-    let entity_ids: HashSet<u64> = snapshot.entities.iter().map(|entity| entity.id).collect();
+    let actor_ids: HashSet<u64> = snapshot
+        .entities
+        .iter()
+        .filter(|entity| entity.actor)
+        .map(|entity| entity.id)
+        .collect();
+    let item_ids: HashSet<u64> = snapshot
+        .entities
+        .iter()
+        .filter(|entity| entity.item)
+        .map(|entity| entity.id)
+        .collect();
     let level_ids: HashSet<u32> = snapshot.levels.iter().map(|level| level.id).collect();
     let mut item_owners: HashMap<u64, u64> = HashMap::new();
 
@@ -622,20 +581,58 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         return Err("snapshot does not contain any levels".to_string());
     }
 
-    if snapshot.current_actor.is_some() {
-        return Err("snapshot current_actor requires a stable save boundary".to_string());
+    if snapshot
+        .simulation_driver
+        .driver
+        .pending_target_minute()
+        .is_some_and(|target| target < snapshot.simulation_driver.driver.clock.minute)
+    {
+        return Err("simulation driver pending target cannot precede its clock".to_string());
     }
-    if !snapshot.pending_actions.is_empty() {
-        return Err("snapshot pending actions require a stable save boundary".to_string());
+    if snapshot
+        .simulation_driver
+        .request
+        .target_minute()
+        .is_some_and(|target| target < snapshot.simulation_driver.driver.clock.minute)
+    {
+        return Err("simulation driver request target cannot precede its clock".to_string());
     }
-    if !snapshot.pending_effects.is_empty() {
-        return Err("snapshot pending effects require a stable save boundary".to_string());
+    if let Some(pending_target) = snapshot.simulation_driver.driver.pending_target_minute() {
+        match snapshot.simulation_driver.request.target_minute() {
+            Some(final_target) if pending_target <= final_target => {}
+            Some(_) => {
+                return Err(
+                    "simulation driver pending target cannot exceed its active request".to_string(),
+                );
+            }
+            None => {
+                return Err(
+                    "simulation driver pending target requires an active request".to_string(),
+                );
+            }
+        }
     }
-    if matches!(
-        snapshot.simulation_status,
-        SimulationStatusSnapshot::Resolving
-    ) {
-        return Err("snapshot resolving status requires a stable save boundary".to_string());
+    if snapshot
+        .simulation_driver
+        .driver
+        .backlog
+        .entries()
+        .iter()
+        .any(|work| work.cadence == Cadence::Tactical)
+    {
+        return Err("simulation driver backlog must not contain tactical work".to_string());
+    }
+    if snapshot
+        .simulation_driver
+        .driver
+        .backlog
+        .entries()
+        .iter()
+        .any(|work| work.domain_event_cost != 1)
+    {
+        return Err(
+            "simulation driver backlog work must emit exactly one domain event".to_string(),
+        );
     }
 
     let max_entity_id = ids.iter().copied().max().unwrap_or(0);
@@ -717,7 +714,7 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
                 ));
             }
             for item in &inventory.items {
-                if !entity_ids.contains(item) {
+                if !item_ids.contains(item) {
                     return Err(format!(
                         "entity {} inventory references missing item {}",
                         entity.id, item
@@ -761,7 +758,7 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         }
 
         if let Some(owner) = entity.carried_by
-            && !entity_ids.contains(&owner)
+            && !actor_ids.contains(&owner)
         {
             return Err(format!(
                 "entity {} carried_by references missing entity {}",
@@ -772,7 +769,7 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         if let Some(goal) = &entity.ai_goal {
             match goal {
                 AiGoalSnapshot::Chase(id) | AiGoalSnapshot::Flee(id) => {
-                    if !entity_ids.contains(id) {
+                    if !actor_ids.contains(id) {
                         return Err(format!(
                             "entity {} ai goal references missing entity {}",
                             entity.id, id
@@ -862,28 +859,48 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         }
     }
 
+    for work in snapshot.simulation_driver.driver.backlog.entries() {
+        if work.id.raw() == 0 {
+            return Err("simulation driver backlog contains invalid domain work id 0".to_string());
+        }
+        if work.cadence == Cadence::Tactical {
+            return Err("simulation driver backlog must not contain tactical work".to_string());
+        }
+    }
+
+    for event in &snapshot.simulation_driver.event_log {
+        if event.id.raw() == 0 {
+            return Err(
+                "simulation driver event log contains invalid domain work id 0".to_string(),
+            );
+        }
+        if event.cadence == Cadence::Tactical {
+            return Err("simulation driver event log must not contain tactical work".to_string());
+        }
+    }
+
     for action in &snapshot.pending_actions {
-        if !entity_ids.contains(&action.actor) {
+        if !actor_ids.contains(&action.actor) {
             return Err(format!(
                 "pending action references missing actor {}",
                 action.actor
             ));
         }
-        validate_action_kind_references(&action.kind, &entity_ids, &level_ids)?;
+        validate_action_kind_references(&action.kind, &actor_ids, &item_ids, &level_ids)?;
     }
 
     for effect in &snapshot.pending_effects {
-        validate_effect_references(effect, &entity_ids, &level_ids)?;
+        validate_effect_references(effect, &actor_ids, &level_ids)?;
     }
 
     for entry in &snapshot.timeline {
-        if !entity_ids.contains(&entry.actor) {
+        if !actor_ids.contains(&entry.actor) {
             return Err(format!("timeline references missing actor {}", entry.actor));
         }
     }
 
     if let Some(current_actor) = snapshot.current_actor
-        && !entity_ids.contains(&current_actor)
+        && !actor_ids.contains(&current_actor)
     {
         return Err(format!(
             "current actor references missing entity {}",
@@ -896,7 +913,8 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
 
 fn validate_action_kind_references(
     kind: &ActionKindSnapshot,
-    entity_ids: &HashSet<u64>,
+    actor_ids: &HashSet<u64>,
+    item_ids: &HashSet<u64>,
     level_ids: &HashSet<u32>,
 ) -> SnapshotResult<()> {
     match kind {
@@ -904,23 +922,28 @@ fn validate_action_kind_references(
         | ActionKindSnapshot::Move { .. }
         | ActionKindSnapshot::Descend
         | ActionKindSnapshot::Ascend => Ok(()),
-        ActionKindSnapshot::Melee { target }
-        | ActionKindSnapshot::PickUp { item: target }
-        | ActionKindSnapshot::Drop { item: target } => {
-            if entity_ids.contains(target) {
+        ActionKindSnapshot::Melee { target } => {
+            if actor_ids.contains(target) {
                 Ok(())
             } else {
                 Err(format!("action references missing entity {}", target))
             }
         }
+        ActionKindSnapshot::PickUp { item } | ActionKindSnapshot::Drop { item } => {
+            if item_ids.contains(item) {
+                Ok(())
+            } else {
+                Err(format!("action references missing item {}", item))
+            }
+        }
         ActionKindSnapshot::UseItem { item, target } => {
-            if !entity_ids.contains(item) {
+            if !item_ids.contains(item) {
                 return Err(format!("action references missing item {}", item));
             }
             match target {
                 ActionTargetSnapshot::SelfTarget => Ok(()),
                 ActionTargetSnapshot::Entity(id) => {
-                    if entity_ids.contains(id) {
+                    if actor_ids.contains(id) {
                         Ok(())
                     } else {
                         Err(format!("action references missing entity {}", id))
@@ -940,23 +963,23 @@ fn validate_action_kind_references(
 
 fn validate_effect_references(
     effect: &EffectSnapshot,
-    entity_ids: &HashSet<u64>,
+    actor_ids: &HashSet<u64>,
     level_ids: &HashSet<u32>,
 ) -> SnapshotResult<()> {
     match effect {
         EffectSnapshot::Damage { source, target, .. } => {
-            if !entity_ids.contains(target) {
+            if !actor_ids.contains(target) {
                 return Err(format!("effect references missing target {}", target));
             }
             if let Some(source) = source
-                && !entity_ids.contains(source)
+                && !actor_ids.contains(source)
             {
                 return Err(format!("effect references missing source {}", source));
             }
             Ok(())
         }
         EffectSnapshot::Heal { target, .. } | EffectSnapshot::ApplyStatus { target, .. } => {
-            if entity_ids.contains(target) {
+            if actor_ids.contains(target) {
                 Ok(())
             } else {
                 Err(format!("effect references missing target {}", target))
@@ -966,7 +989,7 @@ fn validate_effect_references(
             target,
             destination,
         } => {
-            if !entity_ids.contains(target) {
+            if !actor_ids.contains(target) {
                 return Err(format!("effect references missing target {}", target));
             }
             if level_ids.contains(&destination.level) {
@@ -1074,6 +1097,9 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         .ok_or_else(|| "missing simulation status resource".to_string())?;
 
     let mut ids = HashMap::new();
+    let mut stable_actors = HashSet::new();
+    let mut stable_items = HashSet::new();
+    let stable_index = world.get_resource::<StableEntityIndex>();
     for entity in world.iter_entities() {
         let durable = entity.contains::<Actor>() || entity.contains::<Item>();
         let persistent_id = entity.get::<PersistentId>();
@@ -1081,6 +1107,19 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         if durable && persistent_id.is_none() {
             return Err(format!(
                 "durable entity {:?} is missing a persistent id",
+                entity.id()
+            ));
+        }
+
+        if entity.contains::<Actor>() && entity.get::<StableActorId>().is_none() {
+            return Err(format!(
+                "durable actor {:?} is missing a stable actor id",
+                entity.id()
+            ));
+        }
+        if entity.contains::<Item>() && entity.get::<StableItemId>().is_none() {
+            return Err(format!(
+                "durable item {:?} is missing a stable item id",
                 entity.id()
             ));
         }
@@ -1097,6 +1136,64 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
                     "durable entity {:?} is missing a prototype id",
                     entity.id()
                 ));
+            }
+            if let Some(stable) = entity.get::<StableActorId>() {
+                if !stable_actors.insert(stable.0) {
+                    return Err(format!("duplicate stable actor id {}", stable.0.raw()));
+                }
+                if stable.0.raw() != id.0 {
+                    return Err(format!(
+                        "stable actor id {} disagrees with persistent id {} on entity {:?}",
+                        stable.0.raw(),
+                        id.0,
+                        entity.id()
+                    ));
+                }
+                if let Some(index) = stable_index {
+                    let indexed = index.actor(stable.0).ok_or_else(|| {
+                        format!(
+                            "stable actor id {} missing from stable index",
+                            stable.0.raw()
+                        )
+                    })?;
+                    if indexed != entity.id() {
+                        return Err(format!(
+                            "stable actor id {} points to {:?} but entity {:?} carries it",
+                            stable.0.raw(),
+                            indexed,
+                            entity.id()
+                        ));
+                    }
+                }
+            }
+            if let Some(stable) = entity.get::<StableItemId>() {
+                if !stable_items.insert(stable.0) {
+                    return Err(format!("duplicate stable item id {}", stable.0.raw()));
+                }
+                if stable.0.raw() != id.0 {
+                    return Err(format!(
+                        "stable item id {} disagrees with persistent id {} on entity {:?}",
+                        stable.0.raw(),
+                        id.0,
+                        entity.id()
+                    ));
+                }
+                if let Some(index) = stable_index {
+                    let indexed = index.item(stable.0).ok_or_else(|| {
+                        format!(
+                            "stable item id {} missing from stable index",
+                            stable.0.raw()
+                        )
+                    })?;
+                    if indexed != entity.id() {
+                        return Err(format!(
+                            "stable item id {} points to {:?} but entity {:?} carries it",
+                            stable.0.raw(),
+                            indexed,
+                            entity.id()
+                        ));
+                    }
+                }
             }
             if ids.insert(entity.id(), id.0).is_some() {
                 return Err(format!("duplicate persistent id {}", id.0));
@@ -1121,14 +1218,14 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     }
     entities.sort_by_key(|entity| entity.id);
 
-    let current_actor = current_actor.map(|actor| pid_of(actor, &ids)).transpose()?;
+    let current_actor = current_actor.map(|actor| actor.raw());
 
     let mut timeline = Vec::new();
     for entry in clock.timeline.iter() {
         timeline.push(ScheduledActorSnapshot {
             next_tick: entry.0.next_tick,
             sequence: entry.0.sequence,
-            actor: pid_of(entry.0.actor, &ids)?,
+            actor: entry.0.actor.raw(),
         });
     }
     timeline.sort_by_key(|entry| (entry.next_tick, entry.sequence, entry.actor));
@@ -1136,28 +1233,34 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     let mut pending_actions = Vec::new();
     for action in &action_queue.actions {
         pending_actions.push(ActionSnapshot {
-            actor: pid_of(action.actor, &ids)?,
-            kind: action_kind_to_snapshot(&action.kind, &ids)?,
+            actor: action.actor.raw(),
+            kind: action_kind_to_snapshot(&action.kind)?,
         });
     }
 
     let mut pending_effects = Vec::new();
     for effect in &effect_queue.0 {
-        pending_effects.push(effect_to_snapshot(effect, &ids)?);
+        pending_effects.push(effect_to_snapshot(effect)?);
     }
 
-    if !matches!(*decision, crate::action::resolver::ActionDecision::Idle) {
-        return Err("snapshot requires an idle action decision".to_string());
-    }
-    if current_actor.is_some()
-        || !action_queue.actions.is_empty()
-        || !effect_queue.0.is_empty()
-        || simulation_status != SimulationStatus::WaitingForPlayer
-            && simulation_status != SimulationStatus::GameOver
-    {
-        return Err("snapshot requires a stable save boundary".to_string());
-    }
+    let mut simulation_driver = world
+        .get_resource::<SimulationDriverState>()
+        .cloned()
+        .ok_or_else(|| "missing simulation driver resource".to_string())?;
+    simulation_driver
+        .driver
+        .backlog
+        .retain_where(|work| work.cadence != Cadence::Tactical);
+    simulation_driver.driver.budget = Default::default();
+    simulation_driver.driver.progress = Default::default();
 
+    if !matches!(
+        *decision,
+        crate::action::resolver::ActionDecision::Idle
+            | crate::action::resolver::ActionDecision::WaitingForPlayer
+    ) {
+        return Err("snapshot requires an idle or waiting action decision".to_string());
+    }
     let simulation_status = SimulationStatusSnapshot::from(simulation_status);
 
     let levels = vec![build_level_snapshot(map)];
@@ -1175,6 +1278,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         timeline: timeline.clone(),
         pending_actions: pending_actions.clone(),
         pending_effects: pending_effects.clone(),
+        simulation_driver: simulation_driver.clone(),
         rng: rng.snapshot(),
     })?;
 
@@ -1192,6 +1296,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         timeline,
         pending_actions,
         pending_effects,
+        simulation_driver,
         rng: rng.snapshot(),
     })
 }
@@ -1212,6 +1317,8 @@ fn clear_simulation_state(world: &mut World) {
     world.remove_resource::<EffectQueue>();
     world.remove_resource::<TurnClock>();
     world.remove_resource::<CurrentActor>();
+    world.remove_resource::<StableEntityIndex>();
+    world.remove_resource::<SimulationDriverState>();
     world.remove_resource::<SimulationStatus>();
     world.remove_resource::<RandomStreams>();
     world.remove_resource::<PersistentIdAllocator>();
@@ -1224,16 +1331,29 @@ fn rebuild_spatial_and_fov(world: &mut World) -> SnapshotResult<()> {
         &GridPosition,
         Option<&BlocksMovement>,
         Option<&BlocksSight>,
+        Option<&PersistentId>,
+        Option<&StableActorId>,
+        Option<&StableItemId>,
     )>();
-    for (entity, position, blocks_movement, blocks_sight) in query.iter(world) {
-        let key = (position.level, position.cell);
-        spatial.occupants.entry(key).or_default().push(entity);
-        if blocks_movement.is_some() {
-            spatial.movement_blockers.insert(key);
-        }
-        if blocks_sight.is_some() {
-            spatial.sight_blockers.insert(key);
-        }
+    for (
+        entity,
+        position,
+        blocks_movement,
+        blocks_sight,
+        persistent_id,
+        stable_actor,
+        stable_item,
+    ) in query.iter(world)
+    {
+        spatial.insert_occupant(
+            entity,
+            *position,
+            stable_actor,
+            stable_item,
+            persistent_id,
+            blocks_movement.is_some(),
+            blocks_sight.is_some(),
+        );
     }
     world.insert_resource(spatial);
 
@@ -1289,6 +1409,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         timeline: std::collections::BinaryHeap::new(),
     });
     world.insert_resource(CurrentActor::default());
+    world.insert_resource(StableEntityIndex::default());
+    world.insert_resource(SimulationDriverState::default());
     world.insert_resource(SimulationStatus::from(snapshot.simulation_status.clone()));
 
     let mut entity_map = HashMap::new();
@@ -1343,6 +1465,16 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             });
         }
         if entity.actor {
+            let actor_id = sim_core::ActorId::new(entity.id)
+                .ok_or_else(|| format!("invalid actor id {}", entity.id))?;
+            spawned.insert(StableActorId(actor_id));
+        }
+        if entity.item {
+            let item_id = sim_core::ItemId::new(entity.id)
+                .ok_or_else(|| format!("invalid item id {}", entity.id))?;
+            spawned.insert(StableItemId(item_id));
+        }
+        if entity.actor {
             spawned.insert(ActiveStatuses::default());
         }
         let entity_id = spawned.id();
@@ -1357,9 +1489,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
 
         if let Some(owner) = entity.carried_by {
             entity_mut.insert(CarriedBy(
-                *entity_map
-                    .get(&owner)
-                    .ok_or_else(|| format!("missing carried_by entity {}", owner))?,
+                sim_core::ActorId::new(owner)
+                    .ok_or_else(|| format!("invalid actor id {}", owner))?,
             ));
         }
 
@@ -1367,9 +1498,8 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             let mut items = Vec::with_capacity(inventory.items.len());
             for item in &inventory.items {
                 items.push(
-                    *entity_map
-                        .get(item)
-                        .ok_or_else(|| format!("missing inventory item {}", item))?,
+                    sim_core::ItemId::new(*item)
+                        .ok_or_else(|| format!("invalid item id {}", item))?,
                 );
             }
             entity_mut.insert(Inventory {
@@ -1379,7 +1509,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         }
 
         if let Some(goal) = &entity.ai_goal {
-            entity_mut.insert(ai_goal_from_snapshot(goal, &entity_map)?);
+            entity_mut.insert(ai_goal_from_snapshot(goal)?);
         }
 
         if let Some(position) = &entity.last_known_player_position {
@@ -1394,11 +1524,30 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
         }
     }
 
+    if let Some(mut index) = world.get_resource_mut::<StableEntityIndex>() {
+        index.clear();
+        for entity in &snapshot.entities {
+            let entity_id = *entity_map
+                .get(&entity.id)
+                .ok_or_else(|| format!("missing restored entity {}", entity.id))?;
+            if entity.actor {
+                let actor_id = sim_core::ActorId::new(entity.id)
+                    .ok_or_else(|| format!("invalid actor id {}", entity.id))?;
+                index.insert_actor(actor_id, entity_id);
+            }
+            if entity.item {
+                let item_id = sim_core::ItemId::new(entity.id)
+                    .ok_or_else(|| format!("invalid item id {}", entity.id))?;
+                index.insert_item(item_id, entity_id);
+            }
+        }
+    }
+
     if let Some(current_actor) = snapshot.current_actor {
-        let entity = *entity_map
-            .get(&current_actor)
-            .ok_or_else(|| format!("missing current actor {}", current_actor))?;
-        world.insert_resource(CurrentActor(Some(entity)));
+        world.insert_resource(sim_core::schedule::CurrentActor(Some(
+            sim_core::ActorId::new(current_actor)
+                .ok_or_else(|| format!("invalid actor id {}", current_actor))?,
+        )));
     }
 
     if let Some(mut clock) = world.get_resource_mut::<TurnClock>() {
@@ -1406,29 +1555,36 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
             clock.timeline.push(std::cmp::Reverse(ScheduledActor {
                 next_tick: entry.next_tick,
                 sequence: entry.sequence,
-                actor: *entity_map
-                    .get(&entry.actor)
-                    .ok_or_else(|| format!("missing scheduled actor {}", entry.actor))?,
+                actor: sim_core::ActorId::new(entry.actor)
+                    .ok_or_else(|| format!("invalid actor id {}", entry.actor))?,
             }));
         }
+    }
+
+    if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
+        let mut restored_driver = snapshot.simulation_driver.clone();
+        restored_driver.driver.budget = Default::default();
+        restored_driver.driver.progress = Default::default();
+        restored_driver
+            .driver
+            .backlog
+            .retain_where(|work| work.cadence != Cadence::Tactical);
+        *driver = restored_driver;
     }
 
     if let Some(mut queue) = world.get_resource_mut::<ActionQueue>() {
         for action in &snapshot.pending_actions {
             queue.actions.push_back(Action {
-                actor: *entity_map
-                    .get(&action.actor)
-                    .ok_or_else(|| format!("missing queued actor {}", action.actor))?,
-                kind: action_kind_from_snapshot(&action.kind, &entity_map)?,
+                actor: sim_core::ActorId::new(action.actor)
+                    .ok_or_else(|| format!("invalid actor id {}", action.actor))?,
+                kind: action_kind_from_snapshot(&action.kind)?,
             });
         }
     }
 
     if let Some(mut effects) = world.get_resource_mut::<EffectQueue>() {
         for effect in &snapshot.pending_effects {
-            effects
-                .0
-                .push_back(effect_from_snapshot(effect, &entity_map)?);
+            effects.0.push_back(effect_from_snapshot(effect)?);
         }
     }
 
@@ -1454,12 +1610,15 @@ pub fn digest_bytes(bytes: &[u8]) -> String {
 pub fn snapshot_from_bytes(bytes: &[u8]) -> SnapshotResult<SnapshotFile> {
     match ron::de::from_bytes::<GameSnapshot>(bytes) {
         Ok(snapshot) => Ok(SnapshotFile::Current(snapshot)),
-        Err(current_err) => match ron::de::from_bytes::<LegacyGameSnapshotV1>(bytes) {
-            Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
-            Err(legacy_err) => Err(format!(
-                "failed to deserialize current snapshot: {}; legacy snapshot: {}",
-                current_err, legacy_err
-            )),
+        Err(current_err) => match ron::de::from_bytes::<LegacyGameSnapshotV2>(bytes) {
+            Ok(snapshot) => Ok(SnapshotFile::V2(snapshot)),
+            Err(v2_err) => match ron::de::from_bytes::<LegacyGameSnapshotV1>(bytes) {
+                Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
+                Err(v1_err) => Err(format!(
+                    "failed to deserialize current snapshot: {}; v2 snapshot: {}; legacy snapshot: {}",
+                    current_err, v2_err, v1_err
+                )),
+            },
         },
     }
 }
@@ -1471,12 +1630,15 @@ pub fn snapshot_to_bytes(snapshot: &GameSnapshot) -> SnapshotResult<Vec<u8>> {
 pub fn snapshot_from_text(text: &str) -> SnapshotResult<SnapshotFile> {
     match ron::from_str::<GameSnapshot>(text) {
         Ok(snapshot) => Ok(SnapshotFile::Current(snapshot)),
-        Err(current_err) => match ron::from_str::<LegacyGameSnapshotV1>(text) {
-            Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
-            Err(legacy_err) => Err(format!(
-                "failed to deserialize current snapshot: {}; legacy snapshot: {}",
-                current_err, legacy_err
-            )),
+        Err(current_err) => match ron::from_str::<LegacyGameSnapshotV2>(text) {
+            Ok(snapshot) => Ok(SnapshotFile::V2(snapshot)),
+            Err(v2_err) => match ron::from_str::<LegacyGameSnapshotV1>(text) {
+                Ok(snapshot) => Ok(SnapshotFile::V1(snapshot)),
+                Err(v1_err) => Err(format!(
+                    "failed to deserialize current snapshot: {}; v2 snapshot: {}; legacy snapshot: {}",
+                    current_err, v2_err, v1_err
+                )),
+            },
         },
     }
 }

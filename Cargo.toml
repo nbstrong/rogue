@@ -6,6 +6,7 @@ edition = "2024"
 [workspace]
 members = [
     ".",
+    "crates/sim_core",
     "crates/rogue_core",
     "crates/rogue_app",
 ]

@@ -1,12 +1,14 @@
 use bevy_ecs::prelude::*;
 
+use crate::actor::components::{ActorId, ItemId};
+
 #[derive(Component)]
 pub struct Item;
 
 #[derive(Component, Debug, Clone)]
 pub struct Inventory {
     pub capacity: usize,
-    pub items: Vec<Entity>,
+    pub items: Vec<ItemId>,
 }
 
 impl Inventory {
@@ -23,4 +25,4 @@ impl Inventory {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CarriedBy(pub Entity);
+pub struct CarriedBy(pub ActorId);

@@ -1,3 +1,4 @@
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy_math::IVec2;
@@ -8,6 +9,7 @@ use rogue_app::game::{HudText, LogText};
 use rogue_app::input::InputPlugin;
 use rogue_app::persistence::{load_world_from_path, save_world_to_path};
 use rogue_app::presentation::PresentationPlugin;
+use rogue_app::presentation::PresentationRngState;
 use rogue_app::ui::GameUiPlugin;
 use rogue_core::action::resolver::{ActionDecision, ActionOutcomeLog};
 use rogue_core::actor::components::Health;
@@ -142,6 +144,30 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
         *app.world().resource::<SimulationStatus>(),
         SimulationStatus::WaitingForPlayer
     );
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Numpad6);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::Numpad6);
+
+    let second_player = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&GridPosition, With<Player>>()
+            .iter(world)
+            .next()
+            .copied()
+            .expect("player position")
+    };
+
+    assert_eq!(second_player.cell, after_player.cell + IVec2::new(1, 0));
+    assert_eq!(
+        *app.world().resource::<SimulationStatus>(),
+        SimulationStatus::WaitingForPlayer
+    );
 }
 
 #[test]
@@ -212,11 +238,13 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     let player = {
         let world = app.world_mut();
         world
-            .query_filtered::<Entity, With<Player>>()
+            .query_filtered::<(&rogue_core::actor::components::StableActorId, Entity), With<Player>>()
             .iter(world)
             .next()
+            .map(|(stable_id, entity)| (stable_id.0, entity))
             .expect("player entity")
     };
+    let (player_id, player) = player;
 
     app.world_mut().entity_mut(player).insert(Health {
         current: 0,
@@ -224,11 +252,11 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     });
     app.world_mut()
         .resource_mut::<rogue_core::time::clock::TurnClock>()
-        .schedule_at(player, 0);
+        .schedule_at(player_id, 0);
     app.world_mut()
         .resource_mut::<rogue_core::action::queue::ActionQueue>()
         .push(rogue_core::action::intent::Action {
-            actor: player,
+            actor: player_id,
             kind: rogue_core::action::intent::ActionKind::Wait,
         });
     *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
@@ -346,6 +374,10 @@ fn presentation_only_mutations_do_not_change_the_snapshot_digest() {
     let before = snapshot_world(app.world()).expect("before snapshot");
     let before_digest = snapshot_digest(&before).expect("before digest");
 
+    if let Some(mut presentation_rng) = app.world_mut().get_resource_mut::<PresentationRngState>() {
+        let _ = presentation_rng.0.next_u64();
+        let _ = presentation_rng.0.next_u64();
+    }
     if let Some(mut views) = app
         .world_mut()
         .get_resource_mut::<rogue_app::game::MapViews>()
@@ -376,6 +408,79 @@ fn presentation_only_mutations_do_not_change_the_snapshot_digest() {
 
     assert_eq!(before, after);
     assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn extra_presentation_updates_do_not_change_the_authoritative_snapshot() {
+    let mut app = build_app();
+
+    app.update();
+    app.update();
+    app.update();
+    app.update();
+
+    let before = snapshot_world(app.world()).expect("before snapshot");
+    let before_digest = snapshot_digest(&before).expect("before digest");
+
+    app.update();
+    app.update();
+    app.update();
+
+    let after = snapshot_world(app.world()).expect("after snapshot");
+    let after_digest = snapshot_digest(&after).expect("after digest");
+
+    assert_eq!(before, after);
+    assert_eq!(before_digest, after_digest);
+}
+
+#[test]
+fn interleaved_presentation_updates_do_not_change_the_authoritative_turn_sequence() {
+    let mut baseline = build_app();
+    let mut noisy = build_app();
+
+    let play_move = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Numpad6);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::Numpad6);
+    };
+    let noise = |app: &mut App, updates: usize| {
+        for _ in 0..updates {
+            let _ = app.world_mut().run_system_once(
+                rogue_app::presentation::synchronization::synchronize_presentation,
+            );
+        }
+    };
+
+    baseline.update();
+    baseline.update();
+    baseline.update();
+    baseline.update();
+    play_move(&mut baseline);
+    noise(&mut baseline, 1);
+    play_move(&mut baseline);
+    noise(&mut baseline, 1);
+
+    noisy.update();
+    noisy.update();
+    noisy.update();
+    noisy.update();
+    play_move(&mut noisy);
+    noise(&mut noisy, 3);
+    play_move(&mut noisy);
+    noise(&mut noisy, 1);
+
+    let baseline_snapshot = snapshot_world(baseline.world()).expect("baseline snapshot");
+    let noisy_snapshot = snapshot_world(noisy.world()).expect("noisy snapshot");
+
+    assert_eq!(baseline_snapshot, noisy_snapshot);
+    assert_eq!(
+        snapshot_digest(&baseline_snapshot).expect("baseline digest"),
+        snapshot_digest(&noisy_snapshot).expect("noisy digest")
+    );
 }
 
 #[test]
@@ -458,11 +563,13 @@ fn loaded_durable_entities_do_not_leak_across_restart() {
     let player = {
         let world = loaded_app.world_mut();
         world
-            .query_filtered::<Entity, With<Player>>()
+            .query_filtered::<(&rogue_core::actor::components::StableActorId, Entity), With<Player>>()
             .iter(world)
             .next()
+            .map(|(stable_id, entity)| (stable_id.0, entity))
             .expect("player entity")
     };
+    let (player_id, player) = player;
     loaded_app.world_mut().entity_mut(player).insert(Health {
         current: 0,
         maximum: 10,
@@ -470,12 +577,12 @@ fn loaded_durable_entities_do_not_leak_across_restart() {
     loaded_app
         .world_mut()
         .resource_mut::<rogue_core::time::clock::TurnClock>()
-        .schedule_at(player, 0);
+        .schedule_at(player_id, 0);
     loaded_app
         .world_mut()
         .resource_mut::<rogue_core::action::queue::ActionQueue>()
         .push(rogue_core::action::intent::Action {
-            actor: player,
+            actor: player_id,
             kind: rogue_core::action::intent::ActionKind::Wait,
         });
     *loaded_app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;

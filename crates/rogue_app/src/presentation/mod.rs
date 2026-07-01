@@ -1,6 +1,10 @@
 use crate::app_state::AppState;
 use bevy::prelude::*;
 use bevy::state::condition::in_state;
+use rogue_core::persistence::rng::PresentationRng;
+
+#[derive(Resource, Debug, Clone)]
+pub struct PresentationRngState(pub PresentationRng);
 
 pub mod actor_view;
 pub mod animation;
@@ -12,6 +16,7 @@ pub struct PresentationPlugin;
 
 impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(PresentationRngState(PresentationRng::seeded(0)));
         app.add_systems(
             Update,
             (

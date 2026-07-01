@@ -1,11 +1,11 @@
-use bevy_ecs::prelude::Entity;
 use bevy_math::IVec2;
 
+use crate::actor::components::{ActorId, ItemId};
 use crate::world::map::{GridPosition, LevelId};
 
 #[derive(Debug, Clone)]
 pub struct Action {
-    pub actor: Entity,
+    pub actor: ActorId,
     pub kind: ActionKind,
 }
 
@@ -13,10 +13,10 @@ pub struct Action {
 pub enum ActionKind {
     Wait,
     Move { delta: IVec2 },
-    Melee { target: Entity },
-    PickUp { item: Entity },
-    Drop { item: Entity },
-    UseItem { item: Entity, target: ActionTarget },
+    Melee { target: ActorId },
+    PickUp { item: ItemId },
+    Drop { item: ItemId },
+    UseItem { item: ItemId, target: ActionTarget },
     Descend,
     Ascend,
 }
@@ -24,7 +24,7 @@ pub enum ActionKind {
 #[derive(Debug, Clone)]
 pub enum ActionTarget {
     SelfTarget,
-    Entity(Entity),
+    Actor(ActorId),
     Cell { level: LevelId, position: IVec2 },
 }
 

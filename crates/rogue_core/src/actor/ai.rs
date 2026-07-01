@@ -3,7 +3,9 @@ use bevy_math::IVec2;
 
 use crate::action::intent::{Action, ActionKind};
 use crate::action::queue::ActionQueue;
-use crate::actor::components::{HostileToPlayer, Monster, Player};
+use crate::actor::components::{
+    HostileToPlayer, Monster, Player, StableActorId, StableEntityIndex,
+};
 use crate::persistence::rng::RandomStreams;
 use crate::time::clock::CurrentActor;
 use crate::world::map::GridPosition;
@@ -18,39 +20,46 @@ pub fn generate_ai_action(
     monsters: Query<
         '_,
         '_,
-        (Entity, &GridPosition),
+        (&GridPosition, &StableActorId),
         (With<Monster>, With<HostileToPlayer>, Without<Player>),
     >,
-    players: Query<'_, '_, (Entity, &GridPosition), With<Player>>,
+    players: Query<'_, '_, (&GridPosition, &StableActorId), With<Player>>,
     spatial: Res<'_, SpatialIndex>,
+    stable_index: Res<'_, StableEntityIndex>,
     current_actor: Option<Res<'_, CurrentActor>>,
     mut rng: ResMut<'_, RandomStreams>,
 ) {
     let Some(current_actor) = current_actor else {
         return;
     };
-    let Some(current_actor_entity) = current_actor.0 else {
+    let Some(current_actor_id) = current_actor.0 else {
         return;
     };
-    if queue.contains_actor(current_actor_entity) {
+    if queue.contains_actor(current_actor_id) {
         return;
     }
-    let Some((player_entity, player_position)) = players.iter().next() else {
+    let Some((player_position, player_stable_id)) = players.iter().next() else {
+        return;
+    };
+    let Some(_player_entity) = stable_index.actor(player_stable_id.0) else {
         return;
     };
 
-    for (entity, position) in monsters.iter() {
-        if entity != current_actor_entity {
+    for (position, stable_id) in monsters.iter() {
+        if stable_id.0 != current_actor_id {
             continue;
         }
+        let Some(entity) = stable_index.actor(stable_id.0) else {
+            continue;
+        };
 
         let roll = rng.next_ai_u64();
         let delta = player_position.cell - position.cell;
         if delta.x.abs().max(delta.y.abs()) == 1 {
             queue.push(Action {
-                actor: entity,
+                actor: stable_id.0,
                 kind: ActionKind::Melee {
-                    target: player_entity,
+                    target: player_stable_id.0,
                 },
             });
         } else {
@@ -64,18 +73,18 @@ pub fn generate_ai_action(
                         .is_none()
                     {
                         queue.push(Action {
-                            actor: entity,
+                            actor: stable_id.0,
                             kind: ActionKind::Move { delta: movement },
                         });
                     } else {
                         queue.push(Action {
-                            actor: entity,
+                            actor: stable_id.0,
                             kind: ActionKind::Wait,
                         });
                     }
                 } else {
                     queue.push(Action {
-                        actor: entity,
+                        actor: stable_id.0,
                         kind: ActionKind::Wait,
                     });
                 }

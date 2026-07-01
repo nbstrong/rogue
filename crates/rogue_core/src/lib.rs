@@ -11,8 +11,13 @@ pub mod world;
 
 pub use action::intent::{Action, ActionKind, ActionTarget};
 pub use actor::components::*;
+pub use sim_core::{
+    ActorId, IdAllocator, ItemId, PersistentTag, SimClock, SimId, SimSpeed, SimulationWorkBudget,
+    StableIdTag,
+};
 pub use simulation::{
-    SimulationPlugin, SimulationSet, SimulationStatus, SimulationStep, drive_simulation,
+    DomainAdvanceError, SimulationDriverState, SimulationPlugin, SimulationSet, SimulationStatus,
+    SimulationStep, drive_simulation,
 };
 pub use time::clock::{ScheduledActor, TurnClock};
 pub use world::map::{GridPosition, LevelId};
