@@ -17,7 +17,7 @@ use crate::time::scheduler::{finish_simulation_step, select_next_actor};
 use crate::world::fov::recalculate_fov;
 use crate::world::spatial::{SpatialIndex, update_spatial_index};
 use serde::{Deserialize, Serialize};
-use sim_core::{ActorId, Cadence, DeterministicDriver, DueWork, SimulationWorkBudget};
+use sim_core::{ActorId, Cadence, DeterministicDriver, DueWork, FrameAction, SimulationWorkBudget};
 use std::cmp::Reverse;
 
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
@@ -150,8 +150,15 @@ pub fn drive_simulation(world: &mut World) {
     let mut target = driver_state
         .driver
         .pending_target_minute()
-        .unwrap_or_else(|| driver_state.driver.target_minute());
-    if let Some(actor) = action_queue_actor {
+        .unwrap_or_else(|| {
+            tactical_entries
+                .iter()
+                .map(|work| work.due_minute)
+                .min()
+                .unwrap_or(current_tick)
+        });
+    let target_actor = current_actor.or(action_queue_actor);
+    if let Some(actor) = target_actor {
         if let Some(next_due) = tactical_entries
             .iter()
             .find(|work| work.id == actor)
@@ -159,8 +166,6 @@ pub fn drive_simulation(world: &mut World) {
         {
             target = target.max(next_due);
         }
-    } else if current_actor.is_some() {
-        target = target.max(current_tick);
     }
     driver_state.driver.set_pending_target_minute(Some(target));
 
@@ -174,50 +179,73 @@ pub fn drive_simulation(world: &mut World) {
 
     let mut tactical_driver = driver_state.driver.clone();
     tactical_driver.clear_backlog();
+    tactical_driver.replace_backlog(tactical_entries.iter().copied());
 
-    let mut merged_backlog = non_tactical_backlog.clone();
-    merged_backlog.extend(tactical_entries.iter().copied());
-    tactical_driver.replace_backlog(merged_backlog);
+    loop {
+        let stopped = tactical_driver
+            .run_frame_controlled(|_, work| match work.cadence {
+                Cadence::Tactical => {
+                    if let Some(mut clock) = world.get_resource_mut::<TurnClock>() {
+                        clock.current_tick = work.due_minute;
+                    }
+                    world.run_schedule(SimulationStep);
+                    match *world.resource::<SimulationStatus>() {
+                        SimulationStatus::WaitingForPlayer => FrameAction::Yield(1),
+                        SimulationStatus::GameOver => FrameAction::Terminal(1),
+                        SimulationStatus::Resolving => FrameAction::Continue(1),
+                    }
+                }
+                _ => FrameAction::Continue(work.domain_event_cost),
+            })
+            .expect("simulation driver should not exceed its configured budget");
 
-    tactical_driver
-        .run_frame(|_, work| match work.cadence {
-            Cadence::Tactical => {
-                world.run_schedule(SimulationStep);
-                1
-            }
-            _ => work.domain_event_cost,
-        })
-        .expect("simulation driver should not exceed its configured budget");
-
-    if action_queue_actor.is_some() && world.resource::<ActionQueue>().is_empty() {
-        if let Some(mut status) = world.get_resource_mut::<SimulationStatus>() {
-            *status = SimulationStatus::WaitingForPlayer;
+        if !stopped || *world.resource::<SimulationStatus>() != SimulationStatus::Resolving {
+            break;
         }
+
+        if tactical_driver.pending_target_minute().is_none() {
+            break;
+        }
+
+        let tactical_remaining = tactical_backlog_from_clock(
+            world.resource::<TurnClock>(),
+            world.resource::<CurrentActor>().0,
+        );
+        let mut rebuilt_backlog = non_tactical_backlog.clone();
+        rebuilt_backlog.extend(tactical_remaining.iter().copied());
+        tactical_driver.clear_backlog();
+        tactical_driver.replace_backlog(rebuilt_backlog);
     }
 
-    let remaining_backlog = tactical_driver.backlog.entries();
-    let non_tactical_remaining = remaining_backlog
-        .iter()
-        .copied()
-        .filter(|work| work.cadence != Cadence::Tactical)
-        .collect::<Vec<_>>();
     let tactical_remaining = tactical_backlog_from_clock(
         world.resource::<TurnClock>(),
         world.resource::<CurrentActor>().0,
     );
-    let mut merged_backlog = non_tactical_remaining;
+    let mut merged_backlog = non_tactical_backlog;
     merged_backlog.extend(tactical_remaining.iter().copied());
 
+    let pending_target = tactical_driver.pending_target_minute();
     driver_state.driver = tactical_driver;
     driver_state.driver.backlog.clear();
     driver_state.driver.replace_backlog(merged_backlog);
-    driver_state.driver.set_pending_target_minute(
-        if *world.resource::<SimulationStatus>() == SimulationStatus::Resolving {
-            Some(target)
-        } else {
-            None
-        },
-    );
+    driver_state
+        .driver
+        .set_pending_target_minute(pending_target);
+    let current_actor_after = world.resource::<CurrentActor>().0;
+    let action_queue_actor_after = world
+        .resource::<ActionQueue>()
+        .actions
+        .front()
+        .map(|action| action.actor);
+    if pending_target.is_none()
+        && current_actor_after.is_none()
+        && action_queue_actor_after.is_none()
+        && *world.resource::<SimulationStatus>() == SimulationStatus::Resolving
+    {
+        if let Some(mut status) = world.get_resource_mut::<SimulationStatus>() {
+            *status = SimulationStatus::WaitingForPlayer;
+        }
+    }
     world.insert_resource(driver_state.clone());
 
     if let Some(mut clock) = world.get_resource_mut::<TurnClock>() {

@@ -4,7 +4,7 @@ use sim_core::rng::{PresentationRng, RandomStreams};
 use sim_core::schedule::{ScheduledWork, TurnClock, stable_sort_by_key};
 use sim_core::time::{SimClock, SimSpeed};
 use sim_core::work_budget::SimulationWorkBudget;
-use sim_core::{Cadence, DeterministicDriver, DueWork};
+use sim_core::{Cadence, DeterministicDriver, DueWork, FrameAction};
 
 #[test]
 fn typed_ids_allocate_independently() {
@@ -212,6 +212,45 @@ fn driver_exposes_the_due_clock_to_callbacks() {
         .expect("driver frame");
 
     assert_eq!(observed_minutes, vec![(7, 7)]);
+}
+
+#[test]
+fn controlled_driver_callbacks_can_stop_after_a_single_item() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 4,
+    };
+    driver.clock.speed = SimSpeed::VeryFast;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 1,
+        id: 2,
+        domain_event_cost: 1,
+    });
+
+    driver.begin_frame();
+    let stopped = driver
+        .run_frame_controlled(|_, work| {
+            if work.id == 1 {
+                FrameAction::Yield(work.domain_event_cost)
+            } else {
+                FrameAction::Continue(work.domain_event_cost)
+            }
+        })
+        .expect("controlled frame");
+
+    assert!(stopped);
+    assert_eq!(driver.backlog.peek().map(|work| work.id), Some(2));
+    assert_eq!(driver.progress.steps_consumed, 1);
 }
 
 #[test]

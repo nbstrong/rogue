@@ -36,6 +36,13 @@ pub struct DueWork<Id> {
     pub domain_event_cost: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameAction {
+    Continue(usize),
+    Yield(usize),
+    Terminal(usize),
+}
+
 impl<Id: Ord> Ord for DueWork<Id> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (
@@ -278,14 +285,15 @@ impl<Id: Ord + Copy + Eq> DeterministicDriver<Id> {
         self.pending_target_minute = pending_target_minute;
     }
 
-    pub fn run_frame<F>(&mut self, mut apply: F) -> Result<(), DriverError<Id>>
+    fn run_frame_internal<F>(&mut self, mut apply: F) -> Result<bool, DriverError<Id>>
     where
-        F: FnMut(&SimClock, DueWork<Id>) -> usize,
+        F: FnMut(&SimClock, DueWork<Id>) -> FrameAction,
     {
         let target = self
             .pending_target_minute
             .unwrap_or_else(|| self.target_minute());
         let mut processed_minute = self.clock.minute;
+        let mut stopped = false;
         while !self.budget.exhausted(&self.progress) {
             let Some(next) = self.backlog.peek().copied() else {
                 break;
@@ -311,8 +319,15 @@ impl<Id: Ord + Copy + Eq> DeterministicDriver<Id> {
             }
 
             self.clock.minute = processed_minute;
-            let produced = apply(&self.clock, work);
+            let action = apply(&self.clock, work);
             self.progress.consume_step();
+            let produced = match action {
+                FrameAction::Continue(produced) => produced,
+                FrameAction::Yield(produced) | FrameAction::Terminal(produced) => {
+                    stopped = true;
+                    produced
+                }
+            };
             if produced > work.domain_event_cost {
                 panic!(
                     "work produced {} events but declared only {}",
@@ -321,6 +336,10 @@ impl<Id: Ord + Copy + Eq> DeterministicDriver<Id> {
             }
             self.progress
                 .consume_domain_events(work.domain_event_cost.max(1));
+
+            if stopped {
+                break;
+            }
         }
 
         let exhausted = self.budget.exhausted(&self.progress);
@@ -340,7 +359,22 @@ impl<Id: Ord + Copy + Eq> DeterministicDriver<Id> {
             self.pending_target_minute = Some(target);
         }
 
+        Ok(stopped)
+    }
+
+    pub fn run_frame<F>(&mut self, mut apply: F) -> Result<(), DriverError<Id>>
+    where
+        F: FnMut(&SimClock, DueWork<Id>) -> usize,
+    {
+        let _ = self.run_frame_internal(|clock, work| FrameAction::Continue(apply(clock, work)))?;
         Ok(())
+    }
+
+    pub fn run_frame_controlled<F>(&mut self, apply: F) -> Result<bool, DriverError<Id>>
+    where
+        F: FnMut(&SimClock, DueWork<Id>) -> FrameAction,
+    {
+        self.run_frame_internal(apply)
     }
 }
 

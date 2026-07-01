@@ -1210,6 +1210,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         .get_resource::<SimulationDriverState>()
         .cloned()
         .ok_or_else(|| "missing simulation driver resource".to_string())?;
+    simulation_driver.driver.clock.speed = sim_core::SimSpeed::Normal;
     simulation_driver
         .driver
         .backlog
@@ -1526,6 +1527,7 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
 
     if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
         let mut restored_driver = snapshot.simulation_driver.clone();
+        restored_driver.driver.clock.speed = sim_core::SimSpeed::Normal;
         restored_driver.driver.budget = Default::default();
         restored_driver.driver.progress = Default::default();
         let non_tactical_backlog = restored_driver
