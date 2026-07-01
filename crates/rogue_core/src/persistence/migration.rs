@@ -148,19 +148,11 @@ fn migrate_v1_snapshot(snapshot: LegacyGameSnapshotV1) -> Result<GameSnapshot, S
 }
 
 fn snapshot_driver_from_legacy(
-    current_tick: u64,
-    simulation_status: SimulationStatusSnapshot,
+    _current_tick: u64,
+    _simulation_status: SimulationStatusSnapshot,
     _timeline: &[crate::persistence::snapshot::ScheduledActorSnapshot],
 ) -> Result<SimulationDriverState, String> {
     let mut simulation_driver = SimulationDriverState::default();
-    simulation_driver.driver.clock.minute = current_tick;
-    simulation_driver.driver.set_pending_target_minute(
-        if matches!(simulation_status, SimulationStatusSnapshot::Resolving) {
-            Some(current_tick)
-        } else {
-            None
-        },
-    );
     simulation_driver.driver.progress = Default::default();
     simulation_driver.driver.backlog.clear();
     Ok(simulation_driver)

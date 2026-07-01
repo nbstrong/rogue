@@ -581,29 +581,23 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         return Err("snapshot does not contain any levels".to_string());
     }
 
-    if snapshot.simulation_driver.driver.clock.minute != snapshot.current_tick {
-        return Err("simulation driver clock must match the turn clock".to_string());
+    if snapshot
+        .simulation_driver
+        .driver
+        .pending_target_minute()
+        .is_some_and(|target| target < snapshot.simulation_driver.driver.clock.minute)
+    {
+        return Err("simulation driver pending target cannot precede its clock".to_string());
     }
-    match snapshot.simulation_status {
-        SimulationStatusSnapshot::Resolving => {
-            let pending_target = snapshot.simulation_driver.driver.pending_target_minute();
-            if pending_target.is_none() {
-                return Err("resolving snapshots must keep a pending target minute".to_string());
-            }
-            if pending_target.is_some_and(|target| target < snapshot.current_tick) {
-                return Err("resolving snapshots cannot target an earlier minute".to_string());
-            }
-        }
-        SimulationStatusSnapshot::WaitingForPlayer | SimulationStatusSnapshot::GameOver => {
-            if snapshot
-                .simulation_driver
-                .driver
-                .pending_target_minute()
-                .is_some()
-            {
-                return Err("settled snapshots must clear the pending target minute".to_string());
-            }
-        }
+    if snapshot
+        .simulation_driver
+        .driver
+        .backlog
+        .entries()
+        .iter()
+        .any(|work| work.cadence == Cadence::Tactical)
+    {
+        return Err("simulation driver backlog must not contain tactical work".to_string());
     }
 
     let max_entity_id = ids.iter().copied().max().unwrap_or(0);
@@ -1210,7 +1204,6 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
         .get_resource::<SimulationDriverState>()
         .cloned()
         .ok_or_else(|| "missing simulation driver resource".to_string())?;
-    simulation_driver.driver.clock.speed = sim_core::SimSpeed::Normal;
     simulation_driver
         .driver
         .backlog
@@ -1527,36 +1520,12 @@ pub fn restore_world(world: &mut World, snapshot: &GameSnapshot) -> SnapshotResu
 
     if let Some(mut driver) = world.get_resource_mut::<SimulationDriverState>() {
         let mut restored_driver = snapshot.simulation_driver.clone();
-        restored_driver.driver.clock.speed = sim_core::SimSpeed::Normal;
         restored_driver.driver.budget = Default::default();
         restored_driver.driver.progress = Default::default();
-        let non_tactical_backlog = restored_driver
+        restored_driver
             .driver
             .backlog
-            .entries()
-            .into_iter()
-            .filter(|work| work.cadence != Cadence::Tactical)
-            .collect::<Vec<_>>();
-        let tactical_backlog = snapshot
-            .timeline
-            .iter()
-            .map(|entry| {
-                Ok(sim_core::DueWork {
-                    cadence: Cadence::Tactical,
-                    due_minute: entry.next_tick,
-                    sequence: entry.sequence,
-                    id: sim_core::ActorId::new(entry.actor)
-                        .ok_or_else(|| format!("invalid actor id {}", entry.actor))?,
-                    domain_event_cost: 1,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        restored_driver.driver.backlog.clear();
-        restored_driver.driver.replace_backlog(
-            non_tactical_backlog
-                .into_iter()
-                .chain(tactical_backlog.into_iter()),
-        );
+            .retain_where(|work| work.cadence != Cadence::Tactical);
         *driver = restored_driver;
     }
 

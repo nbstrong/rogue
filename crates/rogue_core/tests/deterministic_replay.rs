@@ -20,8 +20,8 @@ use rogue_core::persistence::migration::{CURRENT_SAVE_VERSION, migrate_snapshot}
 use rogue_core::persistence::rng::RandomStreams;
 use rogue_core::persistence::snapshot::{
     ActionKindSnapshot, AiGoalSnapshot, GameSnapshot, SavedInventory, SavedLastKnownPlayerPosition,
-    SavedPosition, ScheduledActorSnapshot, SimulationStatusSnapshot, snapshot_digest,
-    snapshot_from_text, snapshot_to_text, snapshot_world,
+    SavedPosition, ScheduledActorSnapshot, snapshot_digest, snapshot_from_text, snapshot_to_text,
+    snapshot_world,
 };
 use rogue_core::simulation::{SimulationPlugin, SimulationStatus};
 use rogue_core::time::clock::{CurrentActor, TurnClock};
@@ -30,7 +30,7 @@ use rogue_core::world::generation::generate_one_room_with_rng;
 use rogue_core::world::map::{GridPosition, LevelId, LevelMap};
 use rogue_core::world::spatial::SpatialIndex;
 use rogue_core::world::tile::TileKind;
-use sim_core::SimSpeed;
+use sim_core::{DomainWorkId, PresentationRng, SimSpeed};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ReplayFixture {
@@ -403,9 +403,11 @@ fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> Game
         .run_system_once(rogue_core::actor::ai::generate_ai_action)
         .expect("run ai system");
     rogue_core::drive_simulation(app.world_mut());
+    drain_simulation(&mut app);
 
     for command in &fixture.commands {
         drive_command(&mut app, command);
+        drain_simulation(&mut app);
     }
 
     snapshot_world(app.world()).expect("snapshot should be valid")
@@ -448,10 +450,10 @@ fn run_replay_with_speed(fixture: &ReplayFixture, speed: SimSpeed) -> GameSnapsh
     snapshot_world(app.world()).expect("snapshot should be valid")
 }
 
-fn run_commands(app: &mut App, commands: &[ActionKindSnapshot]) {
-    for command in commands {
-        drive_command(app, command);
-    }
+fn projected_snapshot_without_speed(snapshot: &GameSnapshot) -> GameSnapshot {
+    let mut projected = snapshot.clone();
+    projected.simulation_driver.driver.clock.speed = SimSpeed::Normal;
+    projected
 }
 
 fn restore_app_from_snapshot(snapshot: &GameSnapshot) -> App {
@@ -481,7 +483,7 @@ fn drain_simulation(app: &mut App) {
             .resource::<rogue_core::simulation::SimulationDriverState>()
             .driver
             .pending_target_minute();
-        if pending.is_none() || status != SimulationStatus::Resolving {
+        if pending.is_none() && status != SimulationStatus::Resolving {
             return;
         }
 
@@ -596,10 +598,13 @@ fn replay_is_invariant_across_simulation_speeds() {
     let normal = run_replay_with_speed(&fixture, SimSpeed::Normal);
     let very_fast = run_replay_with_speed(&fixture, SimSpeed::VeryFast);
 
-    assert_eq!(normal, very_fast);
     assert_eq!(
-        snapshot_digest(&normal).expect("normal digest"),
-        snapshot_digest(&very_fast).expect("very fast digest")
+        projected_snapshot_without_speed(&normal),
+        projected_snapshot_without_speed(&very_fast)
+    );
+    assert_eq!(
+        snapshot_digest(&projected_snapshot_without_speed(&normal)).expect("normal digest"),
+        snapshot_digest(&projected_snapshot_without_speed(&very_fast)).expect("very fast digest")
     );
 }
 
@@ -657,12 +662,6 @@ fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, 0);
 
-    let player = {
-        let world = app.world_mut();
-        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Player>>();
-        let (_, stable_id) = query.iter(world).next().expect("player entity");
-        stable_id.0
-    };
     {
         let mut driver = app
             .world_mut()
@@ -671,7 +670,7 @@ fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
             cadence: sim_core::Cadence::Hour,
             due_minute: 12,
             sequence: 99,
-            id: player,
+            id: DomainWorkId::new(1).expect("domain work id"),
             domain_event_cost: 2,
         });
     }
@@ -708,8 +707,10 @@ fn continuation_after_restore_matches_the_original_world() {
     let mut original_app = App::new();
     original_app.add_plugins(SimulationPlugin);
     initialize_world(&mut original_app, fixture.seed);
-    run_commands(&mut original_app, &fixture.commands[..split]);
-    drain_simulation(&mut original_app);
+    for command in &fixture.commands[..split] {
+        drive_command(&mut original_app, command);
+        drain_simulation(&mut original_app);
+    }
 
     let prefix_snapshot = snapshot_world(original_app.world()).expect("prefix snapshot");
     let prefix_text = snapshot_to_text(&prefix_snapshot).expect("serialize prefix");
@@ -734,8 +735,12 @@ fn continuation_after_restore_matches_the_original_world() {
     rogue_core::persistence::snapshot::restore_world(restored_app.world_mut(), &restored_snapshot)
         .expect("restore prefix snapshot");
 
-    run_commands(&mut original_app, &fixture.commands[split..]);
-    run_commands(&mut restored_app, &fixture.commands[split..]);
+    for command in &fixture.commands[split..] {
+        drive_command(&mut original_app, command);
+        drain_simulation(&mut original_app);
+        drive_command(&mut restored_app, command);
+        drain_simulation(&mut restored_app);
+    }
 
     let original_final = snapshot_world(original_app.world()).expect("original final snapshot");
     let restored_final = snapshot_world(restored_app.world()).expect("restored final snapshot");
@@ -744,6 +749,50 @@ fn continuation_after_restore_matches_the_original_world() {
     assert_eq!(
         snapshot_digest(&original_final).expect("original final digest"),
         snapshot_digest(&restored_final).expect("restored final digest")
+    );
+}
+
+#[test]
+fn presentation_rng_consumption_does_not_change_the_authoritative_replay() {
+    let fixture = load_fixture();
+    let baseline = run_replay(&fixture);
+
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, fixture.seed);
+    let mut presentation_rng = PresentationRng::seeded(fixture.seed);
+
+    let monster = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(&PersistentId, &StableActorId), With<Monster>>();
+        let (_, stable_id) = query.iter(world).next().expect("monster entity");
+        stable_id.0
+    };
+    app.world_mut()
+        .resource_mut::<ActionQueue>()
+        .actions
+        .clear();
+    *app.world_mut().resource_mut::<CurrentActor>() =
+        sim_core::schedule::CurrentActor(Some(monster));
+    *app.world_mut().resource_mut::<SimulationStatus>() = SimulationStatus::Resolving;
+    app.world_mut()
+        .run_system_once(rogue_core::actor::ai::generate_ai_action)
+        .expect("run ai system");
+    rogue_core::drive_simulation(app.world_mut());
+    drain_simulation(&mut app);
+
+    for command in &fixture.commands {
+        let _ = presentation_rng.next_u64();
+        drive_command(&mut app, command);
+        drain_simulation(&mut app);
+    }
+
+    let with_presentation_noise = snapshot_world(app.world()).expect("snapshot should be valid");
+
+    assert_eq!(baseline, with_presentation_noise);
+    assert_eq!(
+        snapshot_digest(&baseline).expect("baseline digest"),
+        snapshot_digest(&with_presentation_noise).expect("noisy digest")
     );
 }
 
@@ -858,9 +907,17 @@ fn malformed_snapshots_are_rejected() {
 
     let mut cases = Vec::new();
 
-    let mut resolving = base.clone();
-    resolving.simulation_status = SimulationStatusSnapshot::Resolving;
-    cases.push(("resolving status", resolving, "pending target minute"));
+    let mut invalid_domain_target = base.clone();
+    invalid_domain_target.simulation_driver.driver.clock.minute = 10;
+    invalid_domain_target
+        .simulation_driver
+        .driver
+        .set_pending_target_minute(Some(5));
+    cases.push((
+        "invalid domain target",
+        invalid_domain_target,
+        "pending target cannot precede",
+    ));
 
     let mut duplicate_ids = base.clone();
     duplicate_ids

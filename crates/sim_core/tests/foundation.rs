@@ -99,6 +99,41 @@ fn work_budget_continues_without_reordering() {
 }
 
 #[test]
+fn work_budget_orders_by_due_minute_before_cadence() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 8,
+        maximum_domain_events_per_frame: 8,
+    };
+    driver.clock.speed = SimSpeed::VeryFast;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Hour,
+        due_minute: 10,
+        sequence: 1,
+        id: 2,
+        domain_event_cost: 1,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 1,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 1,
+    });
+
+    let mut processed = Vec::new();
+    driver.begin_frame();
+    driver
+        .run_frame(|_, work| {
+            processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("driver frame");
+
+    assert_eq!(processed, vec![1, 2]);
+}
+
+#[test]
 fn work_budget_orders_same_minute_by_cadence_then_sequence() {
     let mut driver = DeterministicDriver::<u64>::default();
     driver.budget = SimulationWorkBudget {

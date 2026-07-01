@@ -69,12 +69,18 @@ pub enum ItemTag {}
 impl StableIdTag for ItemTag {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DomainTag {}
+
+impl StableIdTag for DomainTag {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PersistentTag {}
 
 impl StableIdTag for PersistentTag {}
 
 pub type ActorId = SimId<ActorTag>;
 pub type ItemId = SimId<ItemTag>;
+pub type DomainWorkId = SimId<DomainTag>;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct IdAllocator<Tag> {

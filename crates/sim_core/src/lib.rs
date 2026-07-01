@@ -12,8 +12,8 @@ pub mod work_budget;
 
 pub use driver::{Cadence, DeterministicDriver, DriverError, DueWork, FrameAction, WorkBacklog};
 pub use identity::{
-    ActorId, ActorTag, AllocationError, IdAllocator, ItemId, ItemTag, PersistentTag, SimId,
-    StableIdTag,
+    ActorId, ActorTag, AllocationError, DomainTag, DomainWorkId, IdAllocator, ItemId, ItemTag,
+    PersistentTag, SimId, StableIdTag,
 };
 pub use persistence::version::{CURRENT_SCHEMA_VERSION, SchemaVersion, validate_supported_version};
 pub use rng::{PresentationRng, RandomSnapshot, RandomStreams};
