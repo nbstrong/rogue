@@ -234,7 +234,7 @@ fn waiting_player_turn_is_preserved_until_action_arrives() {
 
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
     assert_eq!(
         app.world().resource::<CurrentActor>().0,
@@ -248,7 +248,7 @@ fn waiting_player_turn_is_preserved_until_action_arrives() {
 
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
     assert!(app.world().resource::<CurrentActor>().0.is_none());
 }
@@ -270,7 +270,7 @@ fn stale_scheduled_actor_is_skipped_before_the_next_valid_actor() {
 
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
     assert_eq!(
         app.world().resource::<CurrentActor>().0,
@@ -291,7 +291,7 @@ fn drive_simulation_keeps_a_live_scheduled_actor_when_the_index_starts_stale() {
 
     assert_eq!(
         app.world().resource::<SimulationStatus>(),
-        &SimulationStatus::WaitingForPlayer
+        &SimulationStatus::AwaitingInput
     );
     assert_eq!(app.world().resource::<CurrentActor>().0, None);
     assert_eq!(
@@ -599,7 +599,7 @@ fn direct_melee_against_a_distant_target_fails_without_damage() {
     ));
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
 }
 
@@ -622,7 +622,7 @@ fn unsupported_actions_report_an_explicit_failure() {
     ));
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
 }
 
@@ -822,7 +822,7 @@ fn drive_simulation_preserves_a_failed_player_action_across_an_ai_turn() {
 
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
     assert_eq!(
         app.world()
@@ -907,7 +907,7 @@ fn actionless_non_player_is_skipped_without_rescheduling() {
 
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
     assert_eq!(
         app.world()

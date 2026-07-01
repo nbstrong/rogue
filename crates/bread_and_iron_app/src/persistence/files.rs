@@ -227,7 +227,7 @@ mod tests {
         world.insert_resource(CurrentActor::default());
         world.insert_resource(TurnClock::default());
         world.insert_resource(SimulationDriverState::default());
-        world.insert_resource(SimulationStatus::WaitingForPlayer);
+        world.insert_resource(SimulationStatus::AwaitingInput);
         let player = world
             .spawn((
                 Actor,
@@ -316,7 +316,7 @@ mod tests {
         loaded.insert_resource(CurrentActor::default());
         loaded.insert_resource(TurnClock::default());
         loaded.insert_resource(SimulationDriverState::default());
-        loaded.insert_resource(SimulationStatus::WaitingForPlayer);
+        loaded.insert_resource(SimulationStatus::AwaitingInput);
 
         load_world_from_path(&mut loaded, &save_name).expect("load bare filename");
 

@@ -194,7 +194,7 @@ pub fn setup_new_game(world: &mut World, clear_existing: bool) {
     world.insert_resource(ActionQueue::default());
     world.insert_resource(EffectQueue::default());
     world.insert_resource(clock);
-    world.insert_resource(SimulationStatus::WaitingForPlayer);
+    world.insert_resource(SimulationStatus::AwaitingInput);
     world.insert_resource(ActionDecision::default());
     world.insert_resource(ActionOutcomeLog::default());
     world.insert_resource(CurrentActor::default());

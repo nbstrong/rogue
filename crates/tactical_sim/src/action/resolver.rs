@@ -36,7 +36,7 @@ pub enum ActionFailure {
 #[derive(Resource, Debug, Clone)]
 pub enum ActionDecision {
     Idle,
-    WaitingForPlayer,
+    AwaitingInput,
     Ready(Action),
     Failed {
         action: Action,
@@ -303,8 +303,8 @@ pub fn validate_action(
 
     let Some(action) = queue.take_for_actor(current_actor) else {
         if current_is_controlled {
-            *status = SimulationStatus::WaitingForPlayer;
-            *decision = ActionDecision::WaitingForPlayer;
+            *status = SimulationStatus::AwaitingInput;
+            *decision = ActionDecision::AwaitingInput;
         } else {
             let action = Action {
                 actor: current_actor,
@@ -382,7 +382,7 @@ pub fn resolve_action(
     let (action, failure) = match decision {
         ActionDecision::Ready(action) => (action, None),
         ActionDecision::Failed { action, failure } => (action, Some(failure)),
-        ActionDecision::WaitingForPlayer | ActionDecision::Idle => {
+        ActionDecision::AwaitingInput | ActionDecision::Idle => {
             return;
         }
     };

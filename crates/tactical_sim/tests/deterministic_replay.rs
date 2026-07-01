@@ -178,7 +178,7 @@ fn initialize_world(app: &mut App, seed: u64) {
         .insert_resource(tactical_sim::item::effects::EffectQueue::default());
     app.world_mut().insert_resource(ActionQueue::default());
     app.world_mut()
-        .insert_resource(SimulationStatus::WaitingForPlayer);
+        .insert_resource(SimulationStatus::AwaitingInput);
     app.world_mut().insert_resource(CurrentActor::default());
 
     let player_persistent_id = {
@@ -1736,7 +1736,7 @@ fn spawn_vertical_slice_advances_the_authoritative_allocator() {
     app.world_mut().insert_resource(ActionQueue::default());
     app.world_mut().insert_resource(EffectQueue::default());
     app.world_mut()
-        .insert_resource(SimulationStatus::WaitingForPlayer);
+        .insert_resource(SimulationStatus::AwaitingInput);
     app.world_mut().insert_resource(CurrentActor::default());
 
     let _ = app.world_mut().run_system_once(
@@ -1789,7 +1789,7 @@ fn nonzero_level_ids_survive_restore_and_resave() {
     app.world_mut().insert_resource(ActionQueue::default());
     app.world_mut().insert_resource(EffectQueue::default());
     app.world_mut()
-        .insert_resource(SimulationStatus::WaitingForPlayer);
+        .insert_resource(SimulationStatus::AwaitingInput);
     app.world_mut().insert_resource(CurrentActor::default());
 
     let player_id = {
@@ -1881,7 +1881,7 @@ fn apply_pending_effects_batches_statuses_and_persists_them() {
     app.world_mut().insert_resource(ActionQueue::default());
     app.world_mut().insert_resource(EffectQueue::default());
     app.world_mut()
-        .insert_resource(SimulationStatus::WaitingForPlayer);
+        .insert_resource(SimulationStatus::AwaitingInput);
     app.world_mut().insert_resource(CurrentActor::default());
 
     let player_id = {
@@ -1991,7 +1991,7 @@ fn select_next_actor_preserves_scheduled_work_when_the_index_is_stale() {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
     app.world_mut()
-        .insert_resource(SimulationStatus::WaitingForPlayer);
+        .insert_resource(SimulationStatus::AwaitingInput);
     app.world_mut().insert_resource(CurrentActor::default());
     app.world_mut()
         .insert_resource(tactical_sim::actor::components::StableEntityIndex::default());
@@ -2021,7 +2021,7 @@ fn select_next_actor_preserves_scheduled_work_when_the_index_is_stale() {
 
     assert_eq!(
         app.world().resource::<SimulationStatus>(),
-        &SimulationStatus::WaitingForPlayer
+        &SimulationStatus::AwaitingInput
     );
     assert!(app.world().resource::<CurrentActor>().0.is_none());
     assert_eq!(

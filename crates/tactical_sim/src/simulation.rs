@@ -38,14 +38,14 @@ pub enum SimulationSet {
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimulationStatus {
-    WaitingForPlayer,
+    AwaitingInput,
     Resolving,
     GameOver,
 }
 
 impl Default for SimulationStatus {
     fn default() -> Self {
-        Self::WaitingForPlayer
+        Self::AwaitingInput
     }
 }
 

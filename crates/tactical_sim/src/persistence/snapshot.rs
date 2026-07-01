@@ -165,7 +165,8 @@ pub struct PersistentIdAllocatorSnapshot {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SimulationStatusSnapshot {
-    WaitingForPlayer,
+    #[serde(alias = "WaitingForPlayer")]
+    AwaitingInput,
     Resolving,
     GameOver,
 }
@@ -173,7 +174,7 @@ pub enum SimulationStatusSnapshot {
 impl From<SimulationStatus> for SimulationStatusSnapshot {
     fn from(value: SimulationStatus) -> Self {
         match value {
-            SimulationStatus::WaitingForPlayer => Self::WaitingForPlayer,
+            SimulationStatus::AwaitingInput => Self::AwaitingInput,
             SimulationStatus::Resolving => Self::Resolving,
             SimulationStatus::GameOver => Self::GameOver,
         }
@@ -183,7 +184,7 @@ impl From<SimulationStatus> for SimulationStatusSnapshot {
 impl From<SimulationStatusSnapshot> for SimulationStatus {
     fn from(value: SimulationStatusSnapshot) -> Self {
         match value {
-            SimulationStatusSnapshot::WaitingForPlayer => Self::WaitingForPlayer,
+            SimulationStatusSnapshot::AwaitingInput => Self::AwaitingInput,
             SimulationStatusSnapshot::Resolving => Self::Resolving,
             SimulationStatusSnapshot::GameOver => Self::GameOver,
         }
@@ -1262,7 +1263,7 @@ pub fn snapshot_world(world: &World) -> SnapshotResult<GameSnapshot> {
     if !matches!(
         *decision,
         crate::action::resolver::ActionDecision::Idle
-            | crate::action::resolver::ActionDecision::WaitingForPlayer
+            | crate::action::resolver::ActionDecision::AwaitingInput
     ) {
         return Err("snapshot requires an idle or waiting action decision".to_string());
     }

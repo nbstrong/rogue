@@ -82,7 +82,7 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
     );
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
 
     let player_position = {
@@ -143,7 +143,7 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
     assert_eq!(after_monster.cell, IVec2::new(8, 7));
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
 
     app.world_mut()
@@ -167,7 +167,7 @@ fn app_boots_into_playing_and_drives_a_turn_without_a_window() {
     assert_eq!(second_player.cell, after_player.cell + IVec2::new(1, 0));
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
 }
 
@@ -299,7 +299,7 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     );
     assert_eq!(
         *app.world().resource::<SimulationStatus>(),
-        SimulationStatus::WaitingForPlayer
+        SimulationStatus::AwaitingInput
     );
     assert!(
         app.world()
@@ -324,7 +324,7 @@ fn player_death_enters_game_over_and_restart_rebuilds_the_world() {
     };
     assert!(hud_text.contains("HP"));
     assert!(hud_text.contains("Pos"));
-    assert!(hud_text.contains("WaitingForPlayer"));
+    assert!(hud_text.contains("AwaitingInput"));
 }
 
 #[test]

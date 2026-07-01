@@ -57,7 +57,7 @@ pub fn finish_simulation_step(
     actors: Query<'_, '_, (&crate::actor::components::Health, &StableActorId)>,
     mut status: ResMut<'_, SimulationStatus>,
 ) {
-    if *status == SimulationStatus::WaitingForPlayer {
+    if *status == SimulationStatus::AwaitingInput {
         return;
     }
 
@@ -75,7 +75,7 @@ pub fn finish_simulation_step(
                 *status = SimulationStatus::Resolving;
                 return;
             }
-            *status = SimulationStatus::WaitingForPlayer;
+            *status = SimulationStatus::AwaitingInput;
             return;
         }
         if stable_index.actor(next.actor).is_none() {
@@ -83,7 +83,7 @@ pub fn finish_simulation_step(
                 .iter()
                 .any(|(health, stable_id)| health.current > 0 && stable_id.0 == next.actor);
             if !live_actor {
-                *status = SimulationStatus::WaitingForPlayer;
+                *status = SimulationStatus::AwaitingInput;
                 return;
             }
         }
@@ -91,5 +91,5 @@ pub fn finish_simulation_step(
         return;
     }
 
-    *status = SimulationStatus::WaitingForPlayer;
+    *status = SimulationStatus::AwaitingInput;
 }

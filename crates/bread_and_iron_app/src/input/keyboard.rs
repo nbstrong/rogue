@@ -43,7 +43,7 @@ pub fn capture_keyboard_input(
     mut simulation: ResMut<'_, SimulationStatus>,
     input_mode: Res<'_, CurrentInputMode>,
 ) {
-    if input_mode.0 != InputMode::Normal || *simulation != SimulationStatus::WaitingForPlayer {
+    if input_mode.0 != InputMode::Normal || *simulation != SimulationStatus::AwaitingInput {
         return;
     }
 
@@ -88,7 +88,7 @@ pub fn restart_from_game_over(
         commands.queue(|world: &mut World| {
             crate::game::setup_new_game(world, true);
         });
-        *simulation = SimulationStatus::WaitingForPlayer;
+        *simulation = SimulationStatus::AwaitingInput;
         next_state.set(AppState::Playing);
     }
 }
