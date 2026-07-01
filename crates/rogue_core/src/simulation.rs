@@ -50,7 +50,18 @@ impl Default for SimulationStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DomainAdvanceRequest {
-    pub target_minute: Option<u64>,
+    #[serde(default)]
+    target_minute: Option<u64>,
+}
+
+impl DomainAdvanceRequest {
+    pub fn target_minute(&self) -> Option<u64> {
+        self.target_minute
+    }
+
+    fn set_target_minute(&mut self, target_minute: Option<u64>) {
+        self.target_minute = target_minute;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +83,18 @@ pub struct DomainSimulationState {
 
 pub type SimulationDriverState = DomainSimulationState;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainAdvanceError {
+    TargetPrecedesClock {
+        clock_minute: u64,
+        requested_minute: u64,
+    },
+    RequestAlreadyActive {
+        active_target: u64,
+        requested_minute: u64,
+    },
+}
+
 impl Default for DomainSimulationState {
     fn default() -> Self {
         Self {
@@ -83,19 +106,45 @@ impl Default for DomainSimulationState {
 }
 
 impl DomainSimulationState {
-    pub fn request_advance(&mut self, target_minute: u64) {
-        self.request.target_minute = Some(target_minute);
-        self.driver.set_pending_target_minute(Some(target_minute));
+    pub fn request_advance(&mut self, target_minute: u64) -> Result<(), DomainAdvanceError> {
+        if target_minute < self.driver.clock.minute {
+            return Err(DomainAdvanceError::TargetPrecedesClock {
+                clock_minute: self.driver.clock.minute,
+                requested_minute: target_minute,
+            });
+        }
+
+        match self.request.target_minute() {
+            Some(active_target) if active_target != target_minute => {
+                Err(DomainAdvanceError::RequestAlreadyActive {
+                    active_target,
+                    requested_minute: target_minute,
+                })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.request.set_target_minute(Some(target_minute));
+                self.driver.set_pending_target_minute(None);
+                Ok(())
+            }
+        }
     }
 
     pub fn clear_request(&mut self) {
-        self.request.target_minute = None;
+        self.request.set_target_minute(None);
+        self.driver.set_pending_target_minute(None);
+    }
+
+    pub fn has_active_domain_request(&self) -> bool {
+        self.request.target_minute().is_some() || self.driver.pending_target_minute().is_some()
+    }
+
+    pub fn has_scheduled_domain_work(&self) -> bool {
+        !self.driver.backlog.is_empty()
     }
 
     pub fn has_active_domain_work(&self) -> bool {
-        self.request.target_minute.is_some()
-            || self.driver.pending_target_minute().is_some()
-            || !self.driver.backlog.is_empty()
+        self.has_active_domain_request()
     }
 }
 
@@ -157,24 +206,28 @@ pub fn drive_simulation(world: &mut World) {
     let status = *world.resource::<SimulationStatus>();
     let has_active_domain = world
         .resource::<SimulationDriverState>()
-        .has_active_domain_work();
+        .has_active_domain_request();
     let has_tactical_work = status == SimulationStatus::Resolving;
     if !has_tactical_work && !has_active_domain {
         return;
     }
     let budget = *world.resource::<SimulationWorkBudget>();
+    let mut remaining_steps = budget.maximum_steps_per_frame;
     if has_tactical_work {
-        let mut tactical_steps_remaining = budget.maximum_steps_per_frame;
-        while tactical_steps_remaining > 0
+        while remaining_steps > 0
             && *world.resource::<SimulationStatus>() == SimulationStatus::Resolving
         {
             world.run_schedule(SimulationStep);
-            tactical_steps_remaining -= 1;
+            remaining_steps -= 1;
         }
 
-        if tactical_steps_remaining == 0 && !has_active_domain {
+        if remaining_steps == 0 {
             return;
         }
+    }
+
+    if remaining_steps == 0 {
+        return;
     }
 
     if world
@@ -186,24 +239,56 @@ pub fn drive_simulation(world: &mut World) {
         return;
     }
 
-    let target = world
-        .resource::<SimulationDriverState>()
-        .request
-        .target_minute
-        .or_else(|| {
-            world
-                .resource::<SimulationDriverState>()
-                .driver
-                .pending_target_minute()
-        });
-    let Some(target) = target else {
-        return;
+    let (final_target, frame_target) = {
+        let state = world.resource::<SimulationDriverState>();
+        let final_target = state
+            .request
+            .target_minute()
+            .or_else(|| state.driver.pending_target_minute());
+        let Some(final_target) = final_target else {
+            return;
+        };
+
+        let frame_target = state
+            .driver
+            .pending_target_minute()
+            .or_else(|| {
+                let window = state.driver.clock.speed.advance_minutes();
+                if window == 0 {
+                    None
+                } else {
+                    Some(final_target.min(state.driver.clock.minute.saturating_add(window)))
+                }
+            })
+            .unwrap_or(final_target);
+
+        (final_target, frame_target)
     };
 
+    let current_minute = world
+        .resource::<SimulationDriverState>()
+        .driver
+        .clock
+        .minute;
+    if frame_target <= current_minute {
+        let mut domain_state = world.resource_mut::<SimulationDriverState>();
+        if current_minute >= final_target {
+            domain_state.clear_request();
+        } else {
+            domain_state.driver.set_pending_target_minute(None);
+        }
+        return;
+    }
+
     let mut domain_state = world.resource_mut::<SimulationDriverState>();
-    domain_state.driver.budget = budget;
+    domain_state.driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: remaining_steps,
+        maximum_domain_events_per_frame: budget.maximum_domain_events_per_frame,
+    };
     domain_state.driver.begin_frame();
-    domain_state.driver.set_pending_target_minute(Some(target));
+    domain_state
+        .driver
+        .set_pending_target_minute(Some(frame_target));
     let mut event_log = Vec::new();
     std::mem::swap(&mut event_log, &mut domain_state.event_log);
     let _ = domain_state
@@ -215,12 +300,14 @@ pub fn drive_simulation(world: &mut World) {
                 sequence: work.sequence,
                 id: work.id,
             });
-            FrameAction::Continue(work.domain_event_cost)
+            FrameAction::Continue(1)
         })
         .expect("domain driver should not exceed its configured budget");
     domain_state.event_log = event_log;
 
-    if domain_state.driver.pending_target_minute().is_none() {
+    if domain_state.driver.pending_target_minute().is_none()
+        && domain_state.driver.clock.minute >= final_target
+    {
         domain_state.clear_request();
     }
 }

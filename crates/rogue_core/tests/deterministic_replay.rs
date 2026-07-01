@@ -339,11 +339,11 @@ fn run_replay(fixture: &ReplayFixture) -> GameSnapshot {
     snapshot_world(app.world()).expect("snapshot should be valid")
 }
 
-fn run_replay_with_budget(
+fn run_replay_with_budget_metrics(
     fixture: &ReplayFixture,
     maximum_steps_per_frame: usize,
     maximum_domain_events_per_frame: usize,
-) -> GameSnapshot {
+) -> (GameSnapshot, String) {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, fixture.seed);
@@ -378,7 +378,9 @@ fn run_replay_with_budget(
         drain_simulation(&mut app);
     }
 
-    snapshot_world(app.world()).expect("snapshot should be valid")
+    let snapshot = snapshot_world(app.world()).expect("snapshot should be valid");
+    let action_log = action_outcome_log_summary(&app);
+    (snapshot, action_log)
 }
 
 fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> GameSnapshot {
@@ -414,7 +416,10 @@ fn run_replay_with_pre_spawned_unrelated_entity(fixture: &ReplayFixture) -> Game
     snapshot_world(app.world()).expect("snapshot should be valid")
 }
 
-fn run_replay_with_speed(fixture: &ReplayFixture, speed: SimSpeed) -> GameSnapshot {
+fn run_replay_with_speed_metrics(
+    fixture: &ReplayFixture,
+    speed: SimSpeed,
+) -> (GameSnapshot, usize, String) {
     let mut app = App::new();
     app.add_plugins(SimulationPlugin);
     initialize_world(&mut app, fixture.seed);
@@ -437,14 +442,20 @@ fn run_replay_with_speed(fixture: &ReplayFixture, speed: SimSpeed) -> GameSnapsh
         .run_system_once(rogue_core::actor::ai::generate_ai_action)
         .expect("run ai system");
     rogue_core::drive_simulation(app.world_mut());
-    drain_simulation(&mut app);
+    let mut updates = 1 + drain_simulation_count(&mut app);
 
     for command in &fixture.commands {
         drive_command(&mut app, command);
-        drain_simulation(&mut app);
+        updates += 1 + drain_simulation_count(&mut app);
     }
 
-    snapshot_world(app.world()).expect("snapshot should be valid")
+    let snapshot = snapshot_world(app.world()).expect("snapshot should be valid");
+    let action_log = action_outcome_log_summary(&app);
+    (snapshot, updates, action_log)
+}
+
+fn run_replay_with_speed(fixture: &ReplayFixture, speed: SimSpeed) -> GameSnapshot {
+    run_replay_with_speed_metrics(fixture, speed).0
 }
 
 fn projected_snapshot_without_speed(snapshot: &GameSnapshot) -> GameSnapshot {
@@ -458,8 +469,9 @@ fn configure_domain_work(app: &mut App, speed: SimSpeed, target: u64) {
         .world_mut()
         .resource_mut::<rogue_core::simulation::SimulationDriverState>();
     driver.driver.clock.set_speed(speed);
-    driver.request.target_minute = Some(target);
-    driver.driver.set_pending_target_minute(Some(target));
+    driver
+        .request_advance(target)
+        .expect("domain request should be valid");
     driver.driver.replace_backlog([
         sim_core::DueWork {
             cadence: sim_core::Cadence::Day,
@@ -505,20 +517,45 @@ fn set_simulation_budget(
 }
 
 fn drain_simulation(app: &mut App) {
-    for _ in 0..512 {
+    let _ = drain_simulation_count(app);
+}
+
+fn drain_simulation_count(app: &mut App) -> usize {
+    let mut updates = 0;
+    for _ in 0..4096 {
         let status = *app.world().resource::<SimulationStatus>();
         let active_domain = app
             .world()
             .resource::<rogue_core::simulation::SimulationDriverState>()
-            .has_active_domain_work();
+            .has_active_domain_request();
         if status != SimulationStatus::Resolving && !active_domain {
-            return;
+            return updates;
         }
 
         rogue_core::drive_simulation(app.world_mut());
+        updates += 1;
     }
 
-    panic!("simulation did not settle within the expected bound");
+    let status = *app.world().resource::<SimulationStatus>();
+    let state = app
+        .world()
+        .resource::<rogue_core::simulation::SimulationDriverState>();
+    panic!(
+        "simulation did not settle within the expected bound: status={status:?}, clock={}, request={:?}, pending={:?}, backlog={}",
+        state.driver.clock.minute,
+        state.request.target_minute(),
+        state.driver.pending_target_minute(),
+        state.driver.backlog.entries().len()
+    );
+}
+
+fn action_outcome_log_summary(app: &App) -> String {
+    format!(
+        "{:?}",
+        app.world()
+            .resource::<rogue_core::action::resolver::ActionOutcomeLog>()
+            .outcomes
+    )
 }
 
 #[test]
@@ -610,14 +647,15 @@ fn snapshot_roundtrip_continues_a_partially_processed_simulation() {
 #[test]
 fn replay_is_invariant_across_frame_budgets() {
     let fixture = load_fixture();
-    let slow = run_replay_with_budget(&fixture, 1_024, 1);
-    let fast = run_replay_with_budget(&fixture, 1_024, 1_024);
+    let (slow, slow_log) = run_replay_with_budget_metrics(&fixture, 1_024, 1);
+    let (fast, fast_log) = run_replay_with_budget_metrics(&fixture, 1_024, 1_024);
 
     assert_eq!(slow, fast);
     assert_eq!(
         snapshot_digest(&slow).expect("slow digest"),
         snapshot_digest(&fast).expect("fast digest")
     );
+    assert_eq!(slow_log, fast_log);
 }
 
 #[test]
@@ -634,6 +672,178 @@ fn replay_is_invariant_across_simulation_speeds() {
         snapshot_digest(&projected_snapshot_without_speed(&normal)).expect("normal digest"),
         snapshot_digest(&projected_snapshot_without_speed(&very_fast)).expect("very fast digest")
     );
+}
+
+#[test]
+fn replay_speed_changes_update_counts_without_changing_results() {
+    let fixture = load_fixture();
+    let (normal, normal_updates, normal_log) =
+        run_replay_with_speed_metrics(&fixture, SimSpeed::Normal);
+    let (fast, fast_updates, fast_log) = run_replay_with_speed_metrics(&fixture, SimSpeed::Fast);
+    let (very_fast, very_fast_updates, very_fast_log) =
+        run_replay_with_speed_metrics(&fixture, SimSpeed::VeryFast);
+
+    assert!(normal_updates > fast_updates);
+    assert!(fast_updates > very_fast_updates);
+    assert_eq!(
+        projected_snapshot_without_speed(&normal),
+        projected_snapshot_without_speed(&fast)
+    );
+    assert_eq!(
+        projected_snapshot_without_speed(&fast),
+        projected_snapshot_without_speed(&very_fast)
+    );
+    assert_eq!(normal_log, fast_log);
+    assert_eq!(fast_log, very_fast_log);
+}
+
+#[test]
+fn future_backlog_remains_dormant_after_the_current_request_completes() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    {
+        let mut state = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        state.driver.clock.set_speed(SimSpeed::VeryFast);
+        state
+            .request_advance(5)
+            .expect("initial request should be valid");
+        state.driver.replace_backlog([
+            sim_core::DueWork {
+                cadence: sim_core::Cadence::Day,
+                due_minute: 5,
+                sequence: 2,
+                id: DomainWorkId::new(3).expect("domain work id"),
+                domain_event_cost: 1,
+            },
+            sim_core::DueWork {
+                cadence: sim_core::Cadence::Hour,
+                due_minute: 10,
+                sequence: 1,
+                id: DomainWorkId::new(2).expect("domain work id"),
+                domain_event_cost: 1,
+            },
+        ]);
+    }
+
+    rogue_core::drive_simulation(app.world_mut());
+    let after_first_request = snapshot_world(app.world()).expect("after first request");
+    assert_eq!(after_first_request.simulation_driver.driver.clock.minute, 5);
+    assert!(
+        after_first_request
+            .simulation_driver
+            .request
+            .target_minute()
+            .is_none()
+    );
+    assert_eq!(
+        after_first_request
+            .simulation_driver
+            .driver
+            .backlog
+            .entries()
+            .len(),
+        1
+    );
+
+    let dormant_snapshot = snapshot_world(app.world()).expect("dormant snapshot");
+    rogue_core::drive_simulation(app.world_mut());
+    let after_dormant_drive = snapshot_world(app.world()).expect("after dormant drive");
+    assert_eq!(dormant_snapshot, after_dormant_drive);
+
+    {
+        let mut state = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        state
+            .request_advance(10)
+            .expect("second request should be valid");
+    }
+
+    drain_simulation(&mut app);
+
+    let final_snapshot = snapshot_world(app.world()).expect("final snapshot");
+    assert_eq!(final_snapshot.simulation_driver.driver.clock.minute, 10);
+    assert!(
+        final_snapshot
+            .simulation_driver
+            .request
+            .target_minute()
+            .is_none()
+    );
+    assert!(final_snapshot.simulation_driver.driver.backlog.is_empty());
+    assert_eq!(
+        final_snapshot
+            .simulation_driver
+            .event_log
+            .iter()
+            .map(|event| event.id.raw())
+            .collect::<Vec<_>>(),
+        vec![3, 2]
+    );
+}
+
+#[test]
+fn combined_tactical_and_domain_work_share_the_step_budget() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+    configure_domain_work(&mut app, SimSpeed::VeryFast, 40);
+    set_simulation_budget(&mut app, 1, 8);
+
+    drive_command(&mut app, &ActionKindSnapshot::Wait);
+
+    assert_eq!(
+        app.world()
+            .resource::<rogue_core::simulation::SimulationDriverState>()
+            .event_log
+            .len(),
+        0
+    );
+    assert!(app.world().resource::<ActionQueue>().actions.is_empty());
+}
+
+#[test]
+fn request_rejection_and_snapshot_request_window_invariants() {
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin);
+    initialize_world(&mut app, 0);
+
+    {
+        let mut state = app
+            .world_mut()
+            .resource_mut::<rogue_core::simulation::SimulationDriverState>();
+        state.driver.clock.minute = 10;
+        assert!(matches!(
+            state.request_advance(9),
+            Err(
+                rogue_core::simulation::DomainAdvanceError::TargetPrecedesClock {
+                    clock_minute: 10,
+                    requested_minute: 9
+                }
+            )
+        ));
+
+        state
+            .request_advance(15)
+            .expect("request should be accepted");
+        assert!(matches!(
+            state.request_advance(20),
+            Err(
+                rogue_core::simulation::DomainAdvanceError::RequestAlreadyActive {
+                    active_target: 15,
+                    requested_minute: 20
+                }
+            )
+        ));
+        state.driver.set_pending_target_minute(Some(20));
+    }
+
+    let err = snapshot_world(app.world()).expect_err("invalid request window");
+    assert!(err.contains("pending target cannot exceed"));
 }
 
 #[test]
@@ -661,7 +871,7 @@ fn domain_work_is_paused_until_the_request_is_resumed() {
 
     let resumed = snapshot_world(app.world()).expect("resumed snapshot");
     assert!(resumed.simulation_driver.event_log.len() >= 3);
-    assert!(resumed.simulation_driver.request.target_minute.is_none());
+    assert!(resumed.simulation_driver.request.target_minute().is_none());
 }
 
 #[test]
@@ -780,7 +990,7 @@ fn snapshot_roundtrip_preserves_non_tactical_driver_backlog() {
             due_minute: 12,
             sequence: 99,
             id: DomainWorkId::new(5).expect("domain work id"),
-            domain_event_cost: 2,
+            domain_event_cost: 1,
         });
     }
 
@@ -1026,6 +1236,17 @@ fn malformed_snapshots_are_rejected() {
         "invalid domain target",
         invalid_domain_target,
         "pending target cannot precede",
+    ));
+
+    let mut pending_without_request = base.clone();
+    pending_without_request
+        .simulation_driver
+        .driver
+        .set_pending_target_minute(Some(5));
+    cases.push((
+        "pending without request",
+        pending_without_request,
+        "requires an active request",
     ));
 
     let mut duplicate_ids = base.clone();

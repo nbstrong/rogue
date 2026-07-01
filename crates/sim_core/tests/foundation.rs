@@ -532,6 +532,73 @@ fn work_that_fits_the_total_budget_but_not_the_remaining_budget_is_deferred() {
 }
 
 #[test]
+fn zero_cost_work_consumes_the_minimum_domain_event_budget() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 1,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 0,
+    });
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 1,
+        id: 2,
+        domain_event_cost: 1,
+    });
+
+    let mut processed = Vec::new();
+    driver.begin_frame();
+    driver
+        .run_frame(|_, work| {
+            processed.push(work.id);
+            work.domain_event_cost
+        })
+        .expect("frame should stop cleanly");
+
+    assert_eq!(processed, vec![1]);
+    assert_eq!(driver.backlog.peek().map(|work| work.id), Some(2));
+    assert_eq!(driver.progress.domain_events_consumed, 1);
+}
+
+#[test]
+fn multi_event_work_is_processed_at_its_declared_cost() {
+    let mut driver = DeterministicDriver::<u64>::default();
+    driver.budget = SimulationWorkBudget {
+        maximum_steps_per_frame: 4,
+        maximum_domain_events_per_frame: 4,
+    };
+    driver.clock.speed = SimSpeed::Normal;
+    driver.enqueue(DueWork {
+        cadence: Cadence::Minute,
+        due_minute: 0,
+        sequence: 0,
+        id: 1,
+        domain_event_cost: 3,
+    });
+
+    let mut processed = Vec::new();
+    driver.begin_frame();
+    driver
+        .run_frame(|_, work| {
+            processed.push((work.id, work.domain_event_cost));
+            work.domain_event_cost
+        })
+        .expect("frame should stop cleanly");
+
+    assert_eq!(processed, vec![(1, 3)]);
+    assert!(driver.backlog.is_empty());
+    assert_eq!(driver.progress.domain_events_consumed, 3);
+}
+
+#[test]
 fn equal_scheduling_keys_with_different_costs_remain_ordered() {
     let mut first = DueWork {
         cadence: Cadence::Minute,

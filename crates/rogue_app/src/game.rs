@@ -439,7 +439,7 @@ fn drive_simulation_if_resolving(world: &mut World) {
     let should_drive = world.resource::<SimulationStatus>() == &SimulationStatus::Resolving
         || world
             .resource::<SimulationDriverState>()
-            .has_active_domain_work();
+            .has_active_domain_request();
 
     if should_drive {
         rogue_core::drive_simulation(world);

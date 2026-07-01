@@ -592,10 +592,25 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
     if snapshot
         .simulation_driver
         .request
-        .target_minute
+        .target_minute()
         .is_some_and(|target| target < snapshot.simulation_driver.driver.clock.minute)
     {
         return Err("simulation driver request target cannot precede its clock".to_string());
+    }
+    if let Some(pending_target) = snapshot.simulation_driver.driver.pending_target_minute() {
+        match snapshot.simulation_driver.request.target_minute() {
+            Some(final_target) if pending_target <= final_target => {}
+            Some(_) => {
+                return Err(
+                    "simulation driver pending target cannot exceed its active request".to_string(),
+                );
+            }
+            None => {
+                return Err(
+                    "simulation driver pending target requires an active request".to_string(),
+                );
+            }
+        }
     }
     if snapshot
         .simulation_driver
@@ -606,6 +621,18 @@ fn validate_snapshot_shape(snapshot: &GameSnapshot) -> SnapshotResult<()> {
         .any(|work| work.cadence == Cadence::Tactical)
     {
         return Err("simulation driver backlog must not contain tactical work".to_string());
+    }
+    if snapshot
+        .simulation_driver
+        .driver
+        .backlog
+        .entries()
+        .iter()
+        .any(|work| work.domain_event_cost != 1)
+    {
+        return Err(
+            "simulation driver backlog work must emit exactly one domain event".to_string(),
+        );
     }
 
     let max_entity_id = ids.iter().copied().max().unwrap_or(0);
